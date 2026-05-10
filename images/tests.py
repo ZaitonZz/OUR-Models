@@ -12,7 +12,12 @@ from django.test import TestCase, override_settings
 from PIL import Image
 
 from .models import ImageJob
-from .signature_verification import SiameseResNet18, extract_signatures, verify_signatures
+from .signature_verification import (
+    SiameseResNet18,
+    distance_to_score,
+    extract_signatures,
+    verify_signatures,
+)
 
 
 TEST_MEDIA_ROOT = tempfile.mkdtemp()
@@ -327,6 +332,8 @@ class ImageUploadApiTests(TestCase):
                     'best_match_id': 'abadia',
                     'best_match_name': 'Judito T. Abadia',
                     'distance': 0.42,
+                    'score': 0.62,
+                    'verdict': 'GENUINE',
                     'is_match': True,
                     'ink_pixels': 25,
                     'bbox_xywh': [1, 2, 3, 4],
@@ -374,3 +381,6 @@ class SignatureVerificationTests(TestCase):
         )
         self.assertTrue(all(signature.band_crop.size > 0 for signature in signatures))
         self.assertTrue(all(signature.ink_mask.size > 0 for signature in signatures))
+
+    def test_distance_threshold_maps_to_half_similarity_score(self):
+        self.assertEqual(distance_to_score(distance=0.3771, decision_threshold=0.3771), 0.5)

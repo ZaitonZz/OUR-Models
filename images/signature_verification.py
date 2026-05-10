@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -11,7 +11,7 @@ import torch.nn as nn
 from django.conf import settings
 from PIL import Image
 from torchvision import transforms
-from torchvision.models import resnet18
+from torchvision import models
 
 
 SLOTS = {
@@ -38,11 +38,13 @@ SIGNATURE_CONFIG = {
     'safe_band_widen_px_1024x1536': 24,
     'fallback_signature_y_frac': 0.845,
 }
+CANVAS_W = 640
+CANVAS_H = 360
 
 _transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
 ])
 
 
@@ -59,7 +61,7 @@ class ExtractedSignature:
 class SiameseResNet18(nn.Module):
     def __init__(self):
         super().__init__()
-        self.backbone = resnet18(weights=None)
+        self.backbone = models.resnet18(weights=None)
         self.backbone.fc = nn.Identity()
         self.embedding_head = nn.Sequential(
             nn.Linear(512, 256),
@@ -69,9 +71,12 @@ class SiameseResNet18(nn.Module):
             nn.Linear(256, 128),
         )
 
-    def forward(self, image):
+    def forward_once(self, image):
         embedding = self.embedding_head(self.backbone(image))
         return nn.functional.normalize(embedding, p=2, dim=1)
+
+    def forward(self, image_a, image_b):
+        return self.forward_once(image_a), self.forward_once(image_b)
 
 
 def load_personnel() -> dict:
@@ -162,15 +167,19 @@ def match_signature(
         references,
         key=lambda reference: float(torch.dist(embedding, reference['embedding']).item()),
     )
-    distance = round(float(torch.dist(embedding, best['embedding']).item()), 4)
+    distance = float(torch.dist(embedding, best['embedding']).item())
+    score = distance_to_score(distance, threshold)
+    verdict = score_to_verdict(score)
 
     return {
         'slot': signature.slot,
         'label': signature.label,
         'best_match_id': best['personnel_id'],
         'best_match_name': allowed.get(best['personnel_id'], best['personnel_id']),
-        'distance': distance,
-        'is_match': distance <= threshold,
+        'distance': round(distance, 4),
+        'score': round(score, 4),
+        'verdict': verdict,
+        'is_match': verdict == 'GENUINE',
         'ink_pixels': signature.ink_pixels,
         'bbox_xywh': signature.bbox_xywh,
         'band_crop_url': band_url,
@@ -203,8 +212,8 @@ def save_signature_artifacts(signature: ExtractedSignature, external_id: str, re
 def get_signature_model() -> SiameseResNet18:
     device = torch.device(settings.TOR_SIGNATURE_DEVICE or ('cuda' if torch.cuda.is_available() else 'cpu'))
     model = SiameseResNet18().to(device)
-    state = torch.load(settings.TOR_SIGNATURE_MODEL_WEIGHTS_PATH, map_location=device, weights_only=False)
-    model.load_state_dict(state)
+    checkpoint = torch.load(settings.TOR_SIGNATURE_MODEL_WEIGHTS_PATH, map_location=device, weights_only=False)
+    model.load_state_dict(extract_state_dict(checkpoint), strict=True)
     model.eval()
     return model
 
@@ -245,17 +254,101 @@ def embed_image(image: np.ndarray) -> torch.Tensor:
     if image is None or image.size == 0:
         raise ValueError('Cannot embed an empty signature image.')
 
-    if len(image.shape) == 2:
-        rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-    else:
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    if len(image.shape) == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
+    mask = to_white_ink_mask(image)
+    normalized = center_on_16x9_canvas(mask)
+    rgb = cv2.cvtColor(normalized, cv2.COLOR_GRAY2RGB)
     tensor = _transform(Image.fromarray(rgb)).unsqueeze(0)
     model = get_signature_model()
     device = next(model.parameters()).device
 
     with torch.no_grad():
-        return model(tensor.to(device)).cpu().squeeze(0)
+        return model.forward_once(tensor.to(device)).cpu().squeeze(0)
+
+
+def strip_module_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    if not any(key.startswith('module.') for key in state_dict):
+        return state_dict
+
+    return {
+        key.replace('module.', '', 1): value
+        for key, value in state_dict.items()
+    }
+
+
+def extract_state_dict(checkpoint: Any) -> dict[str, torch.Tensor]:
+    if isinstance(checkpoint, dict):
+        for key in ['model_state_dict', 'state_dict', 'model', 'net']:
+            value = checkpoint.get(key)
+            if isinstance(value, dict):
+                return strip_module_prefix(value)
+
+        if all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
+            return strip_module_prefix(checkpoint)
+
+    raise ValueError('Unsupported Siamese checkpoint format.')
+
+
+def to_white_ink_mask(image: np.ndarray) -> np.ndarray:
+    gray = image.copy()
+    if len(gray.shape) == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
+    if float(np.mean(gray)) < 80:
+        _threshold, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    else:
+        _threshold, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    return remove_tiny_components(mask, min_area=18)
+
+
+def center_on_16x9_canvas(mask: np.ndarray, margin: float = 0.14) -> np.ndarray:
+    ys, xs = np.where(mask > 0)
+    canvas = np.zeros((CANVAS_H, CANVAS_W), dtype=np.uint8)
+
+    if len(xs) == 0 or len(ys) == 0:
+        return canvas
+
+    x1, x2 = int(xs.min()), int(xs.max())
+    y1, y2 = int(ys.min()), int(ys.max())
+    crop = mask[y1:y2 + 1, x1:x2 + 1]
+    h, w = crop.shape[:2]
+
+    if h <= 0 or w <= 0:
+        return canvas
+
+    max_w = int(CANVAS_W * (1.0 - 2.0 * margin))
+    max_h = int(CANVAS_H * (1.0 - 2.0 * margin))
+    scale = min(max_w / max(w, 1), max_h / max(h, 1))
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    resized = cv2.resize(crop, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    x0 = (CANVAS_W - new_w) // 2
+    y0 = (CANVAS_H - new_h) // 2
+    canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
+    return canvas
+
+
+def distance_to_score(distance: float, decision_threshold: float) -> float:
+    if decision_threshold <= 0:
+        raise ValueError('TOR_SIGNATURE_DISTANCE_THRESHOLD must be greater than 0.')
+
+    score = 1.0 - (distance / (2.0 * decision_threshold))
+    return float(np.clip(score, 0.0, 1.0))
+
+
+def score_to_verdict(score: float) -> str:
+    if score >= 0.60:
+        return 'GENUINE'
+
+    if score <= 0.35:
+        return 'SUSPICIOUS'
+
+    return 'NEEDS MANUAL REVIEW'
 
 
 def scale_bbox_from_base(bbox, img_w, img_h):
