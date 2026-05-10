@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Image Processor</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; max-width: 820px; }
+    form, .job { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; }
+    button { cursor: pointer; padding: 0.55rem 0.9rem; }
+    code, pre { background: #f5f5f5; border-radius: 4px; padding: 0.2rem 0.35rem; }
+    pre { overflow: auto; padding: 1rem; }
+    .error { color: #a40000; }
+    .jobs { display: grid; gap: 0.75rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Image Processor</h1>
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <p>
+      <label for="image">Image file</label><br>
+      <input id="image" type="file" name="image" accept="image/*" required>
+    </p>
+    <p>
+      <label for="callback_url">Result callback URL</label><br>
+      <input id="callback_url" type="url" name="callback_url" placeholder="https://example.com/api/results" style="width: 100%; max-width: 520px;">
+    </p>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <button type="submit">Upload and process</button>
+  </form>
+
+  <h2>Website API</h2>
+  <p>Send a multipart POST request to <code>/api/images/</code> with the file field named <code>image</code>. Add <code>callback_url</code> when the result should be posted to a specific endpoint.</p>
+  <pre>curl -F "image=@path/to/photo.jpg" -F "callback_url=https://example.com/api/results" http://127.0.0.1:8000/api/images/</pre>
+
+  <h2>Latest jobs</h2>
+  <div class="jobs">
+    {% for job in latest_jobs %}
+      <div class="job">
+        <a href="{% url 'image_detail' job.pk %}">Job #{{ job.pk }}</a>
+        <strong>{{ job.status }}</strong>
+        <div>{{ job.created_at }}</div>
+      </div>
+    {% empty %}
+      <p>No uploads yet.</p>
+    {% endfor %}
+  </div>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Image Job #{{ job.pk }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; max-width: 820px; }
+    img { height: auto; max-width: 100%; }
+    code, pre { background: #f5f5f5; border-radius: 4px; padding: 0.2rem 0.35rem; }
+    pre { overflow: auto; padding: 1rem; }
+    .error { color: #a40000; }
+  </style>
+</head>
+<body>
+  <p><a href="{% url 'upload_page' %}">Back to uploads</a></p>
+  <h1>Image Job #{{ job.pk }}</h1>
+  <p>Status: <strong>{{ job.status }}</strong></p>
+  {% if job.callback_url %}
+    <p>Callback: <code>{{ job.callback_url }}</code></p>
+  {% endif %}
+  {% if job.callback_status_code %}
+    <p>Callback status: <strong>{{ job.callback_status_code }}</strong></p>
+  {% endif %}
+  {% if job.callback_error %}
+    <p class="error">Callback error: {{ job.callback_error }}</p>
+  {% endif %}
+  <img src="{{ job.image.url }}" alt="Uploaded image">
+
+  {% if job.error %}
+    <h2>Error</h2>
+    <p class="error">{{ job.error }}</p>
+  {% endif %}
+
+  <h2>Result</h2>
+  <pre>{{ job.result }}</pre>
+
+  <h2>Status API</h2>
+  <pre>/api/images/{{ job.pk }}/</pre>
+</body>
+</html>
