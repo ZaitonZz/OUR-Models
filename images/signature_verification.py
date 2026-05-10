@@ -85,20 +85,34 @@ def load_personnel() -> dict:
         return json.load(handle)
 
 
-def verify_signatures(document_image: np.ndarray, external_id: str, request=None) -> dict:
+def verify_signatures(
+    document_image: np.ndarray,
+    external_id: str,
+    request=None,
+    expected_signatures: Optional[dict[str, str]] = None,
+) -> dict:
     threshold = float(settings.TOR_SIGNATURE_DISTANCE_THRESHOLD)
+    expected_signatures = expected_signatures or {}
 
     try:
         extracted = extract_signatures(document_image)
         reference_index = get_reference_index()
         signatures = [
-            match_signature(signature, reference_index, threshold, external_id, request)
+            match_signature(
+                signature,
+                reference_index,
+                threshold,
+                external_id,
+                request,
+                expected_signatures=expected_signatures,
+            )
             for signature in extracted
         ]
 
         return {
             'success': True,
             'threshold': threshold,
+            'expected_signatures': expected_signatures,
             'signatures': signatures,
             'error': '',
         }
@@ -106,6 +120,7 @@ def verify_signatures(document_image: np.ndarray, external_id: str, request=None
         return {
             'success': False,
             'threshold': threshold,
+            'expected_signatures': expected_signatures,
             'signatures': [],
             'error': str(exc),
         }
@@ -138,12 +153,22 @@ def match_signature(
     threshold: float,
     external_id: str,
     request=None,
+    expected_signatures: Optional[dict[str, str]] = None,
 ) -> dict:
     allowed = {person['id']: person['name'] for person in load_personnel().get(signature.slot, [])}
+    expected_signatures = expected_signatures or {}
+    expected_id = expected_signatures.get(signature.slot)
+    expected_name = allowed.get(expected_id, expected_id) if expected_id else None
     references = [
         reference for reference in reference_index.get(signature.slot, [])
         if reference['personnel_id'] in allowed
     ]
+
+    if expected_id:
+        references = [
+            reference for reference in references
+            if reference['personnel_id'] == expected_id
+        ]
 
     band_url, mask_url = save_signature_artifacts(signature, external_id, request)
 
@@ -151,6 +176,8 @@ def match_signature(
         return {
             'slot': signature.slot,
             'label': signature.label,
+            'expected_match_id': expected_id,
+            'expected_match_name': expected_name,
             'best_match_id': None,
             'best_match_name': None,
             'distance': None,
@@ -159,7 +186,11 @@ def match_signature(
             'bbox_xywh': signature.bbox_xywh,
             'band_crop_url': band_url,
             'ink_mask_url': mask_url,
-            'error': f'No reference signatures found for {signature.label}.',
+            'error': (
+                f'No reference signatures found for expected {signature.label} signer.'
+                if expected_id
+                else f'No reference signatures found for {signature.label}.'
+            ),
         }
 
     embedding = embed_image(signature.ink_mask)
@@ -174,6 +205,8 @@ def match_signature(
     return {
         'slot': signature.slot,
         'label': signature.label,
+        'expected_match_id': expected_id,
+        'expected_match_name': expected_name,
         'best_match_id': best['personnel_id'],
         'best_match_name': allowed.get(best['personnel_id'], best['personnel_id']),
         'distance': round(distance, 4),

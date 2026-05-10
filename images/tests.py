@@ -1,3 +1,4 @@
+import json
 import shutil
 import tempfile
 from io import BytesIO
@@ -101,6 +102,7 @@ class ImageUploadApiTests(TestCase):
             {
                 'image': upload,
                 'external_id': 'website-1',
+                'expected_signatures': json.dumps(self.expected_signatures()),
             },
             HTTP_X_TOR_SERVICE_TOKEN='test-token',
         )
@@ -147,6 +149,7 @@ class ImageUploadApiTests(TestCase):
                 'image': upload,
                 'external_id': 'website-1',
                 'callback_url': 'https://example.com/api/results',
+                'expected_signatures': json.dumps(self.expected_signatures()),
             },
             HTTP_X_TOR_SERVICE_TOKEN='test-token',
         )
@@ -170,6 +173,10 @@ class ImageUploadApiTests(TestCase):
         self.assertIn('/media/preprocessed/', payload['preprocessed_image_url'])
         mock_get_detector.return_value.predict.assert_called_once()
         mock_verify_signatures.assert_called_once()
+        self.assertEqual(
+            mock_verify_signatures.call_args.kwargs['expected_signatures'],
+            self.expected_signatures(),
+        )
 
         mock_post.assert_called_once()
         callback_url = mock_post.call_args.args[0]
@@ -322,10 +329,19 @@ class ImageUploadApiTests(TestCase):
         )
 
     @staticmethod
+    def expected_signatures():
+        return {
+            'sig1_prepared_by': 'abadia',
+            'sig2_checked_by': 'arabejo',
+            'sig3_certified_by': 'maniscan',
+        }
+
+    @staticmethod
     def make_signature_verification():
         return {
             'success': True,
             'threshold': 0.85,
+            'expected_signatures': ImageUploadApiTests.expected_signatures(),
             'signatures': [
                 {
                     'slot': 'sig1_prepared_by',

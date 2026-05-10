@@ -16,7 +16,7 @@ from .signature_verification import verify_signatures
 PREPROCESSOR_CONFIG_PATH = Path(__file__).with_name('tor_preprocessor_config.json')
 
 
-def process_image_job(job: ImageJob, request=None) -> ImageJob:
+def process_image_job(job: ImageJob, request=None, expected_signatures: dict | None = None) -> ImageJob:
     """Run TOR preprocessing and inference for an upload, then notify the website."""
     job.status = ImageJob.Status.PREPROCESSING
     job.error = ''
@@ -43,6 +43,7 @@ def process_image_job(job: ImageJob, request=None) -> ImageJob:
             preprocessing_result.warped,
             external_id=job.external_id,
             request=request,
+            expected_signatures=expected_signatures or {},
         )
 
         job.status = ImageJob.Status.COMPLETE

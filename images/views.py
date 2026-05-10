@@ -1,3 +1,5 @@
+import json
+
 from django.http import JsonResponse
 from django.conf import settings
 from django.shortcuts import get_object_or_404, redirect, render
@@ -8,8 +10,34 @@ from .models import ImageJob
 from .services import process_image_job
 
 
+SIGNATURE_SLOTS = ('sig1_prepared_by', 'sig2_checked_by', 'sig3_certified_by')
+
+
 def is_authorized_service_request(request):
     return request.headers.get('X-TOR-Service-Token') == settings.TOR_SERVICE_TOKEN
+
+
+def expected_signatures_from_request(request):
+    raw_expected_signatures = request.POST.get('expected_signatures', '').strip()
+    if raw_expected_signatures:
+        try:
+            parsed = json.loads(raw_expected_signatures)
+        except json.JSONDecodeError:
+            return {}
+
+        if isinstance(parsed, dict):
+            return {
+                slot: value.strip()
+                for slot, value in parsed.items()
+                if slot in SIGNATURE_SLOTS and isinstance(value, str) and value.strip()
+            }
+
+    return {
+        slot: value.strip()
+        for slot in SIGNATURE_SLOTS
+        for value in [request.POST.get(f'expected_signatures[{slot}]', '')]
+        if value.strip()
+    }
 
 
 def upload_page(request):
@@ -19,6 +47,7 @@ def upload_page(request):
         image_file = request.FILES.get('image')
         external_id = request.POST.get('external_id', '').strip()
         callback_url = request.POST.get('callback_url', '').strip()
+        expected_signatures = expected_signatures_from_request(request)
         if not image_file or not external_id or not callback_url:
             return render(
                 request,
@@ -45,7 +74,7 @@ def upload_page(request):
             external_id=external_id,
             callback_url=callback_url,
         )
-        process_image_job(job, request=request)
+        process_image_job(job, request=request, expected_signatures=expected_signatures)
         return redirect('image_detail', pk=job.pk)
 
     return render(request, 'images/upload.html', {'latest_jobs': latest_jobs})
@@ -65,6 +94,7 @@ def image_upload_api(request):
     image_file = request.FILES.get('image')
     external_id = request.POST.get('external_id', '').strip()
     callback_url = request.POST.get('callback_url', '').strip()
+    expected_signatures = expected_signatures_from_request(request)
     missing_fields = [
         field_name
         for field_name, value in {
@@ -89,7 +119,7 @@ def image_upload_api(request):
         external_id=external_id,
         callback_url=callback_url,
     )
-    process_image_job(job, request=request)
+    process_image_job(job, request=request, expected_signatures=expected_signatures)
 
     response = {
         'id': job.pk,
