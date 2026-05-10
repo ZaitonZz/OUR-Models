@@ -14,7 +14,7 @@ from django.test import TestCase, override_settings
 from PIL import Image
 
 from .models import ImageJob
-from .ocr import extract_degree_from_text
+from .ocr import extract_degree_from_path, extract_degree_from_text
 from .signature_verification import (
     SiameseResNet18,
     distance_to_score,
@@ -107,7 +107,7 @@ class ImageUploadApiTests(TestCase):
         self.assertIn('Unknown model_key', response.json()['error'])
 
     @patch('images.services.requests.post')
-    @patch('images.services.extract_degree_from_image')
+    @patch('images.services.extract_degree_from_path')
     @patch('images.services.verify_signatures')
     @patch('images.services.get_detector')
     @patch('images.services.DocumentPreprocessor.load_config')
@@ -156,17 +156,30 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(response.status_code, 409)
 
     @patch('images.services.requests.post')
-    @patch('images.services.extract_degree_from_image')
+    @patch('images.services.extract_degree_from_path')
     @patch('images.services.verify_signatures')
     @patch('images.services.get_detector')
     @patch('images.services.DocumentPreprocessor.load_config')
     def test_upload_api_runs_inference_and_posts_callback(self, mock_load_config, mock_get_detector, mock_verify_signatures, mock_extract_degree, mock_post):
-        mock_load_config.return_value = Mock(run=Mock(return_value=self.make_preprocess_result()))
+        events = []
+
+        def extract_degree_side_effect(_image_path):
+            events.append('ocr')
+
+            return self.make_degree_extraction()
+
+        def preprocess_side_effect(**_kwargs):
+            self.assertEqual(events, ['ocr'])
+            events.append('preprocess')
+
+            return self.make_preprocess_result()
+
+        mock_load_config.return_value = Mock(run=Mock(side_effect=preprocess_side_effect))
         mock_get_detector.return_value = Mock(
             predict=Mock(return_value=self.make_inference_result())
         )
         mock_verify_signatures.return_value = self.make_signature_verification()
-        mock_extract_degree.return_value = self.make_degree_extraction()
+        mock_extract_degree.side_effect = extract_degree_side_effect
         mock_post.return_value = Mock(status_code=200, text='ok')
         upload = self.make_image_upload()
 
@@ -212,7 +225,8 @@ class ImageUploadApiTests(TestCase):
         mock_get_detector.assert_called_once_with('resnet50_mean')
         mock_get_detector.return_value.predict.assert_called_once()
         mock_verify_signatures.assert_called_once()
-        mock_extract_degree.assert_called_once()
+        mock_extract_degree.assert_called_once_with(job.image.path)
+        self.assertEqual(events, ['ocr', 'preprocess'])
         self.assertEqual(
             mock_verify_signatures.call_args.kwargs['expected_signatures'],
             self.expected_signatures(),
@@ -487,6 +501,19 @@ class SignatureReferenceSyncApiTests(TestCase):
 
 
 class OcrExtractionTests(TestCase):
+    @patch('images.ocr.extract_degree_from_image')
+    @patch('images.ocr.cv2.imread')
+    def test_degree_extraction_reads_original_image_path(self, mock_imread, mock_extract_degree):
+        image = np.full((100, 80, 3), 255, dtype=np.uint8)
+        mock_imread.return_value = image
+        mock_extract_degree.return_value = {'degree': 'Bachelor of Science in Information Technology'}
+
+        result = extract_degree_from_path('/tmp/original-upload.png')
+
+        mock_imread.assert_called_once_with('/tmp/original-upload.png', cv2.IMREAD_COLOR)
+        mock_extract_degree.assert_called_once_with(image)
+        self.assertEqual(result['degree'], 'Bachelor of Science in Information Technology')
+
     def test_degree_extraction_reads_value_from_next_line(self):
         text = """
         Name: Juan Dela Cruz

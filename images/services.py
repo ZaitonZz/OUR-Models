@@ -8,7 +8,7 @@ from django.utils.text import get_valid_filename
 
 from .models import ImageJob
 from .model_registry import get_detector, get_model_config, model_metadata
-from .ocr import extract_degree_from_image
+from .ocr import extract_degree_from_path
 from .preprocessing_pipeline import DocumentPreprocessor
 from .signature_verification import verify_signatures
 
@@ -23,6 +23,7 @@ def process_image_job(job: ImageJob, request=None, expected_signatures: dict | N
     job.save(update_fields=['status', 'error', 'updated_at'])
 
     try:
+        degree_extraction = extract_degree_from_path(job.image.path)
         preprocessor = DocumentPreprocessor.load_config(str(PREPROCESSOR_CONFIG_PATH))
         preprocessing_result = preprocessor.run(image_path=job.image.path)
         if not preprocessing_result.success:
@@ -45,7 +46,7 @@ def process_image_job(job: ImageJob, request=None, expected_signatures: dict | N
             request=request,
             expected_signatures=expected_signatures or {},
         )
-        inference_result['degree_extraction'] = extract_degree_from_image(preprocessing_result.warped)
+        inference_result['degree_extraction'] = degree_extraction
 
         job.status = ImageJob.Status.COMPLETE
         job.result = inference_result

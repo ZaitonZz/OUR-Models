@@ -11,8 +11,18 @@ DEGREE_LABEL_PATTERN = re.compile(
 )
 
 
+def extract_degree_from_path(image_path: str) -> dict[str, Any]:
+    """Extract the Degree/Title/Course value from the original uploaded TOR image."""
+    document_image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+
+    if document_image is None:
+        return unavailable_result(f'OCR failed: could not read image at {image_path}.')
+
+    return extract_degree_from_image(document_image)
+
+
 def extract_degree_from_image(document_image: np.ndarray) -> dict[str, Any]:
-    """Extract the Degree/Title/Course value from a preprocessed TOR image."""
+    """Extract the Degree/Title/Course value from a TOR image."""
     try:
         import pytesseract
     except ImportError:
