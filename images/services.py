@@ -1,4 +1,5 @@
 from pathlib import Path
+from functools import lru_cache
 
 import cv2
 import requests
@@ -7,6 +8,7 @@ from django.conf import settings
 from django.utils.text import get_valid_filename
 
 from .models import ImageJob
+from .inference import TORInference
 from .preprocessing_pipeline import DocumentPreprocessor
 
 
@@ -14,7 +16,7 @@ PREPROCESSOR_CONFIG_PATH = Path(__file__).with_name('tor_preprocessor_config.jso
 
 
 def process_image_job(job: ImageJob, request=None) -> ImageJob:
-    """Run TOR preprocessing for an upload and notify the website."""
+    """Run TOR preprocessing and inference for an upload, then notify the website."""
     job.status = ImageJob.Status.PREPROCESSING
     job.error = ''
     job.save(update_fields=['status', 'error', 'updated_at'])
@@ -32,7 +34,12 @@ def process_image_job(job: ImageJob, request=None) -> ImageJob:
             'skew_status': preprocessing_result.skew_status,
             'patch_counts': preprocessing_result.patch_counts,
         }
-        job.result = {}
+        inference_result = run_models(preprocessing_result.patches)
+        if not inference_result['success']:
+            raise ValueError(inference_result.get('error') or 'Inference failed.')
+
+        job.status = ImageJob.Status.COMPLETE
+        job.result = inference_result
         job.error = ''
     except Exception as exc:
         job.status = ImageJob.Status.FAILED
@@ -108,21 +115,28 @@ def build_result_payload(job: ImageJob, request=None) -> dict:
         'method': preprocessing.get('method', ''),
         'skew_status': preprocessing.get('skew_status', ''),
         'patch_counts': preprocessing.get('patch_counts', {}),
+        'result': job.result,
         'error': job.error,
     }
 
 
-def run_models(image_path: str) -> dict:
-    """
-    Replace this with your real model pipeline.
+@lru_cache(maxsize=1)
+def get_detector() -> TORInference:
+    device = settings.TOR_INFERENCE_DEVICE or None
+    return TORInference(
+        weights_path=settings.TOR_MODEL_WEIGHTS_PATH,
+        threshold=settings.TOR_INFERENCE_THRESHOLD,
+        device=device,
+    )
 
-    Keep the return value JSON-serializable so the result can be stored in the
-    database and returned by the API.
-    """
+
+def run_models(patches: list) -> dict:
+    inference_result = get_detector().predict(patches)
     return {
-        'placeholder_model': {
-            'label': 'not_configured',
-            'confidence': 0.0,
-            'source_path': image_path,
-        }
+        'success': inference_result.success,
+        'label': inference_result.label,
+        'score': inference_result.score,
+        'roi_scores': inference_result.roi_scores,
+        'top_roi': inference_result.top_roi,
+        'error': inference_result.error or '',
     }

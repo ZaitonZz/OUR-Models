@@ -1,6 +1,6 @@
 # OUR Models
 
-A small Django service for receiving image uploads from a website, preprocessing TOR document images, and notifying the website when preprocessing is complete.
+A small Django service for receiving image uploads from a website, preprocessing TOR document images, running forgery inference, and notifying the website when processing is complete.
 
 ## Setup
 
@@ -25,17 +25,17 @@ Send `multipart/form-data` to `POST /api/images/` with:
 curl.exe -F "image=@C:\path\to\photo.jpg" -F "external_id=upload-123" -F "callback_url=https://example.com/api/results" http://127.0.0.1:8000/api/images/
 ```
 
-The upload response includes the Django `job_id`, the website `external_id`, preprocessing status, and the preprocessed image URL.
+The upload response includes the Django `job_id`, the website `external_id`, processing status, the preprocessed image URL, and the inference result.
 
-## Preprocessing callback
+## Processing callback
 
-After preprocessing finishes, Django POSTs JSON to `callback_url`:
+After preprocessing and inference finish, Django POSTs JSON to `callback_url`:
 
 ```json
 {
   "external_id": "upload-123",
   "job_id": 1,
-  "status": "preprocessed",
+  "status": "complete",
   "original_image_url": "http://127.0.0.1:8000/media/uploads/...",
   "preprocessed_image_url": "http://127.0.0.1:8000/media/preprocessed/...",
   "method": "brightness",
@@ -44,6 +44,18 @@ After preprocessing finishes, Django POSTs JSON to `callback_url`:
     "header": 0,
     "body": 0,
     "footer": 0
+  },
+  "result": {
+    "success": true,
+    "label": "genuine",
+    "score": 0.1234,
+    "roi_scores": {
+      "header": 0.1,
+      "body": 0.12,
+      "footer": 0.15
+    },
+    "top_roi": "footer",
+    "error": ""
   },
   "error": ""
 }
@@ -55,6 +67,12 @@ Check a job later with:
 GET /api/images/<id>/
 ```
 
-## Model hook
+## Model
 
-`patch_baseline_final.pth` is not run yet. The current flow stops after preprocessing and callback notification. The next phase can feed the transient patches from `images/preprocessing_pipeline.py` into the model.
+`patch_baseline_final.pth` is loaded by `images/inference.py` and receives transient patches from `images/preprocessing_pipeline.py`. You can override model settings with:
+
+```powershell
+$env:TOR_MODEL_WEIGHTS_PATH = "C:\path\to\patch_baseline_final.pth"
+$env:TOR_INFERENCE_THRESHOLD = "0.380"
+$env:TOR_INFERENCE_DEVICE = "cpu"
+```

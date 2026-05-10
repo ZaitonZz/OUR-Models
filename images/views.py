@@ -102,7 +102,7 @@ def image_upload_api(request):
         'callback_status_code': job.callback_status_code,
         'callback_error': job.callback_error,
     }
-    status = 201 if job.status == ImageJob.Status.PREPROCESSED else 422
+    status = 201 if job.status == ImageJob.Status.COMPLETE else 422
     return JsonResponse(response, status=status)
 
 

@@ -126,3 +126,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 PREPROCESSING_CALLBACK_TIMEOUT_SECONDS = float(
     os.environ.get('PREPROCESSING_CALLBACK_TIMEOUT_SECONDS', '10')
 )
+TOR_MODEL_WEIGHTS_PATH = os.environ.get(
+    'TOR_MODEL_WEIGHTS_PATH',
+    str(BASE_DIR / 'patch_baseline_final.pth'),
+)
+TOR_INFERENCE_THRESHOLD = float(os.environ.get('TOR_INFERENCE_THRESHOLD', '0.380'))
+TOR_INFERENCE_DEVICE = os.environ.get('TOR_INFERENCE_DEVICE', '')
