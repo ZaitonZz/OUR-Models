@@ -16,6 +16,7 @@ from .signature_verification import (
     SiameseResNet18,
     distance_to_score,
     extract_signatures,
+    reference_image_paths,
     verify_signatures,
 )
 
@@ -384,3 +385,17 @@ class SignatureVerificationTests(TestCase):
 
     def test_distance_threshold_maps_to_half_similarity_score(self):
         self.assertEqual(distance_to_score(distance=0.3771, decision_threshold=0.3771), 0.5)
+
+    def test_reference_image_paths_prefers_genuine_subfolder(self):
+        person_dir = Path(TEST_MEDIA_ROOT) / 'references' / 'sig1_prepared_by' / 'abadia'
+        genuine_dir = person_dir / 'genuine'
+        forged_dir = person_dir / 'forged'
+        genuine_dir.mkdir(parents=True, exist_ok=True)
+        forged_dir.mkdir(parents=True, exist_ok=True)
+        (person_dir / 'direct.png').write_bytes(b'direct')
+        (genuine_dir / 'sample.png').write_bytes(b'genuine')
+        (forged_dir / 'sample.png').write_bytes(b'forged')
+
+        paths = reference_image_paths(person_dir)
+
+        self.assertEqual(paths, [genuine_dir / 'sample.png'])

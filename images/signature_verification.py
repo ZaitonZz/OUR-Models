@@ -233,10 +233,7 @@ def get_reference_index() -> dict:
             if not person_dir.exists():
                 continue
 
-            for image_path in sorted(person_dir.glob('*')):
-                if image_path.suffix.lower() not in {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}:
-                    continue
-
+            for image_path in reference_image_paths(person_dir):
                 image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
                 if image is None:
                     continue
@@ -248,6 +245,16 @@ def get_reference_index() -> dict:
                 })
 
     return index
+
+
+def reference_image_paths(person_dir: Path) -> list[Path]:
+    valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+    search_dir = person_dir / 'genuine' if (person_dir / 'genuine').exists() else person_dir
+
+    return [
+        path for path in sorted(search_dir.glob('*'))
+        if path.is_file() and path.suffix.lower() in valid_extensions
+    ]
 
 
 def embed_image(image: np.ndarray) -> torch.Tensor:
