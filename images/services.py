@@ -10,6 +10,7 @@ from django.utils.text import get_valid_filename
 from .models import ImageJob
 from .inference import TORInference
 from .preprocessing_pipeline import DocumentPreprocessor
+from .signature_verification import verify_signatures
 
 
 PREPROCESSOR_CONFIG_PATH = Path(__file__).with_name('tor_preprocessor_config.json')
@@ -37,6 +38,12 @@ def process_image_job(job: ImageJob, request=None) -> ImageJob:
         inference_result = run_models(preprocessing_result.patches)
         if not inference_result['success']:
             raise ValueError(inference_result.get('error') or 'Inference failed.')
+
+        inference_result['signature_verification'] = verify_signatures(
+            preprocessing_result.warped,
+            external_id=job.external_id,
+            request=request,
+        )
 
         job.status = ImageJob.Status.COMPLETE
         job.result = inference_result

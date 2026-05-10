@@ -1,15 +1,18 @@
 import shutil
 import tempfile
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
+import torch
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from PIL import Image
 
 from .models import ImageJob
+from .signature_verification import SiameseResNet18, extract_signatures, verify_signatures
 
 
 TEST_MEDIA_ROOT = tempfile.mkdtemp()
@@ -76,13 +79,15 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(ImageJob.objects.count(), 0)
 
     @patch('images.services.requests.post')
+    @patch('images.services.verify_signatures')
     @patch('images.services.get_detector')
     @patch('images.services.DocumentPreprocessor.load_config')
-    def test_upload_api_allows_missing_callback_url(self, mock_load_config, mock_get_detector, mock_post):
+    def test_upload_api_allows_missing_callback_url(self, mock_load_config, mock_get_detector, mock_verify_signatures, mock_post):
         mock_load_config.return_value = Mock(run=Mock(return_value=self.make_preprocess_result()))
         mock_get_detector.return_value = Mock(
             predict=Mock(return_value=self.make_inference_result())
         )
+        mock_verify_signatures.return_value = self.make_signature_verification()
         upload = self.make_image_upload()
 
         response = self.client.post(
@@ -118,13 +123,15 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(response.status_code, 409)
 
     @patch('images.services.requests.post')
+    @patch('images.services.verify_signatures')
     @patch('images.services.get_detector')
     @patch('images.services.DocumentPreprocessor.load_config')
-    def test_upload_api_runs_inference_and_posts_callback(self, mock_load_config, mock_get_detector, mock_post):
+    def test_upload_api_runs_inference_and_posts_callback(self, mock_load_config, mock_get_detector, mock_verify_signatures, mock_post):
         mock_load_config.return_value = Mock(run=Mock(return_value=self.make_preprocess_result()))
         mock_get_detector.return_value = Mock(
             predict=Mock(return_value=self.make_inference_result())
         )
+        mock_verify_signatures.return_value = self.make_signature_verification()
         mock_post.return_value = Mock(status_code=200, text='ok')
         upload = self.make_image_upload()
 
@@ -149,8 +156,14 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(job.preprocessing['patch_counts']['body'], 2)
         self.assertEqual(job.result['label'], 'genuine')
         self.assertEqual(job.result['score'], 0.1234)
+        self.assertTrue(job.result['signature_verification']['success'])
+        self.assertEqual(
+            job.result['signature_verification']['signatures'][0]['best_match_name'],
+            'Judito T. Abadia',
+        )
         self.assertIn('/media/preprocessed/', payload['preprocessed_image_url'])
         mock_get_detector.return_value.predict.assert_called_once()
+        mock_verify_signatures.assert_called_once()
 
         mock_post.assert_called_once()
         callback_url = mock_post.call_args.args[0]
@@ -164,6 +177,7 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(callback_payload['patch_counts']['body'], 2)
         self.assertEqual(callback_payload['result']['label'], 'genuine')
         self.assertEqual(callback_payload['result']['top_roi'], 'footer')
+        self.assertTrue(callback_payload['result']['signature_verification']['success'])
         self.assertEqual(payload['callback_status_code'], 200)
 
     @patch('images.services.requests.post')
@@ -300,3 +314,63 @@ class ImageUploadApiTests(TestCase):
             top_roi='footer',
             error=None,
         )
+
+    @staticmethod
+    def make_signature_verification():
+        return {
+            'success': True,
+            'threshold': 0.85,
+            'signatures': [
+                {
+                    'slot': 'sig1_prepared_by',
+                    'label': 'Prepared By',
+                    'best_match_id': 'abadia',
+                    'best_match_name': 'Judito T. Abadia',
+                    'distance': 0.42,
+                    'is_match': True,
+                    'ink_pixels': 25,
+                    'bbox_xywh': [1, 2, 3, 4],
+                    'band_crop_url': 'http://testserver/media/signatures/job/sig1_prepared_by_band.png',
+                    'ink_mask_url': 'http://testserver/media/signatures/job/sig1_prepared_by_ink_mask.png',
+                    'error': '',
+                }
+            ],
+            'error': '',
+        }
+
+
+class SignatureVerificationTests(TestCase):
+    def test_siamese_checkpoint_loads_when_present(self):
+        checkpoint = Path(__file__).resolve().parent.parent / 'siamese_resnet18_finetuned_no_leakage.pth'
+        if not checkpoint.exists():
+            self.skipTest('Siamese checkpoint is not present.')
+
+        model = SiameseResNet18()
+        state = torch.load(checkpoint, map_location='cpu', weights_only=False)
+        missing, unexpected = model.load_state_dict(state, strict=False)
+
+        self.assertEqual(missing, [])
+        self.assertEqual(unexpected, [])
+
+    @override_settings(
+        TOR_SIGNATURE_REFERENCES_ROOT=str(Path(TEST_MEDIA_ROOT) / 'missing-references'),
+        TOR_SIGNATURE_DISTANCE_THRESHOLD=0.85,
+    )
+    def test_missing_reference_folder_returns_signature_error(self):
+        image = np.full((1700, 1024, 3), 255, dtype=np.uint8)
+        result = verify_signatures(image, external_id='website-1')
+
+        self.assertFalse(result['success'])
+        self.assertEqual(result['signatures'], [])
+        self.assertIn('Signature reference folder does not exist', result['error'])
+
+    def test_signature_extraction_returns_three_slots(self):
+        image = np.full((1700, 1024, 3), 255, dtype=np.uint8)
+        signatures = extract_signatures(image)
+
+        self.assertEqual(
+            [signature.slot for signature in signatures],
+            ['sig1_prepared_by', 'sig2_checked_by', 'sig3_certified_by'],
+        )
+        self.assertTrue(all(signature.band_crop.size > 0 for signature in signatures))
+        self.assertTrue(all(signature.ink_mask.size > 0 for signature in signatures))

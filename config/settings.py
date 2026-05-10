@@ -140,3 +140,13 @@ TOR_MODEL_WEIGHTS_PATH = os.environ.get(
 )
 TOR_INFERENCE_THRESHOLD = float(os.environ.get('TOR_INFERENCE_THRESHOLD', '0.380'))
 TOR_INFERENCE_DEVICE = os.environ.get('TOR_INFERENCE_DEVICE', '')
+TOR_SIGNATURE_MODEL_WEIGHTS_PATH = os.environ.get(
+    'TOR_SIGNATURE_MODEL_WEIGHTS_PATH',
+    str(BASE_DIR / 'siamese_resnet18_finetuned_no_leakage.pth'),
+)
+TOR_SIGNATURE_REFERENCES_ROOT = os.environ.get(
+    'TOR_SIGNATURE_REFERENCES_ROOT',
+    str(BASE_DIR / 'signature_references'),
+)
+TOR_SIGNATURE_DISTANCE_THRESHOLD = float(os.environ.get('TOR_SIGNATURE_DISTANCE_THRESHOLD', '0.850'))
+TOR_SIGNATURE_DEVICE = os.environ.get('TOR_SIGNATURE_DEVICE', '')
