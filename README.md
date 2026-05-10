@@ -4,11 +4,25 @@ A small Django service for receiving image uploads from a website, preprocessing
 
 ## Setup
 
+Windows:
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 .\.venv\Scripts\python manage.py migrate
 .\.venv\Scripts\python manage.py runserver
+```
+
+Linux server:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip uninstall -y opencv-python opencv-contrib-python opencv-python-headless
+pip install --no-cache-dir -r requirements.txt
+python manage.py migrate
+export DJANGO_ALLOWED_HOSTS="127.0.0.1,localhost,172.18.0.1"
+python manage.py runserver 127.0.0.1:8001
 ```
 
 Open `http://127.0.0.1:8000/` for the upload form.
