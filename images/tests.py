@@ -15,7 +15,7 @@ from .models import ImageJob
 TEST_MEDIA_ROOT = tempfile.mkdtemp()
 
 
-@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
+@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT, TOR_SERVICE_TOKEN='test-token')
 class ImageUploadApiTests(TestCase):
     @classmethod
     def tearDownClass(cls):
@@ -29,9 +29,35 @@ class ImageUploadApiTests(TestCase):
                 'external_id': 'website-1',
                 'callback_url': 'https://example.com/api/results',
             },
+            HTTP_X_TOR_SERVICE_TOKEN='test-token',
         )
 
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(ImageJob.objects.count(), 0)
+
+    def test_upload_api_rejects_missing_service_token(self):
+        response = self.client.post(
+            '/api/images/',
+            {
+                'image': self.make_image_upload(),
+                'external_id': 'website-1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(ImageJob.objects.count(), 0)
+
+    def test_upload_api_rejects_invalid_service_token(self):
+        response = self.client.post(
+            '/api/images/',
+            {
+                'image': self.make_image_upload(),
+                'external_id': 'website-1',
+            },
+            HTTP_X_TOR_SERVICE_TOKEN='wrong-token',
+        )
+
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(ImageJob.objects.count(), 0)
 
     def test_upload_api_requires_external_id(self):
@@ -43,12 +69,20 @@ class ImageUploadApiTests(TestCase):
                 'image': upload,
                 'callback_url': 'https://example.com/api/results',
             },
+            HTTP_X_TOR_SERVICE_TOKEN='test-token',
         )
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(ImageJob.objects.count(), 0)
 
-    def test_upload_api_requires_callback_url(self):
+    @patch('images.services.requests.post')
+    @patch('images.services.get_detector')
+    @patch('images.services.DocumentPreprocessor.load_config')
+    def test_upload_api_allows_missing_callback_url(self, mock_load_config, mock_get_detector, mock_post):
+        mock_load_config.return_value = Mock(run=Mock(return_value=self.make_preprocess_result()))
+        mock_get_detector.return_value = Mock(
+            predict=Mock(return_value=self.make_inference_result())
+        )
         upload = self.make_image_upload()
 
         response = self.client.post(
@@ -57,10 +91,12 @@ class ImageUploadApiTests(TestCase):
                 'image': upload,
                 'external_id': 'website-1',
             },
+            HTTP_X_TOR_SERVICE_TOKEN='test-token',
         )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(ImageJob.objects.count(), 0)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(ImageJob.objects.get().callback_url, '')
+        mock_post.assert_not_called()
 
     def test_upload_api_rejects_duplicate_external_id(self):
         ImageJob.objects.create(
@@ -76,6 +112,7 @@ class ImageUploadApiTests(TestCase):
                 'external_id': 'website-1',
                 'callback_url': 'https://example.com/api/results',
             },
+            HTTP_X_TOR_SERVICE_TOKEN='test-token',
         )
 
         self.assertEqual(response.status_code, 409)
@@ -98,6 +135,7 @@ class ImageUploadApiTests(TestCase):
                 'external_id': 'website-1',
                 'callback_url': 'https://example.com/api/results',
             },
+            HTTP_X_TOR_SERVICE_TOKEN='test-token',
         )
 
         self.assertEqual(response.status_code, 201)
@@ -154,6 +192,7 @@ class ImageUploadApiTests(TestCase):
                 'external_id': 'website-inference-fail',
                 'callback_url': 'https://example.com/api/results',
             },
+            HTTP_X_TOR_SERVICE_TOKEN='test-token',
         )
 
         self.assertEqual(response.status_code, 422)
@@ -178,6 +217,7 @@ class ImageUploadApiTests(TestCase):
                 'external_id': 'website-bad',
                 'callback_url': 'https://example.com/api/results',
             },
+            HTTP_X_TOR_SERVICE_TOKEN='test-token',
         )
 
         self.assertEqual(response.status_code, 422)

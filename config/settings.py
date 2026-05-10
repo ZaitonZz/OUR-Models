@@ -126,6 +126,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 PREPROCESSING_CALLBACK_TIMEOUT_SECONDS = float(
     os.environ.get('PREPROCESSING_CALLBACK_TIMEOUT_SECONDS', '10')
 )
+TOR_SERVICE_TOKEN = os.environ.get('TOR_SERVICE_TOKEN', 'local-dev-token')
 TOR_MODEL_WEIGHTS_PATH = os.environ.get(
     'TOR_MODEL_WEIGHTS_PATH',
     str(BASE_DIR / 'patch_baseline_final.pth'),

@@ -1,10 +1,15 @@
 from django.http import JsonResponse
+from django.conf import settings
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .models import ImageJob
 from .services import process_image_job
+
+
+def is_authorized_service_request(request):
+    return request.headers.get('X-TOR-Service-Token') == settings.TOR_SERVICE_TOKEN
 
 
 def upload_page(request):
@@ -54,6 +59,9 @@ def image_detail(request, pk):
 @csrf_exempt
 @require_http_methods(['POST'])
 def image_upload_api(request):
+    if not is_authorized_service_request(request):
+        return JsonResponse({'error': 'Invalid TOR service token.'}, status=403)
+
     image_file = request.FILES.get('image')
     external_id = request.POST.get('external_id', '').strip()
     callback_url = request.POST.get('callback_url', '').strip()
@@ -62,7 +70,6 @@ def image_upload_api(request):
         for field_name, value in {
             'image': image_file,
             'external_id': external_id,
-            'callback_url': callback_url,
         }.items()
         if not value
     ]
