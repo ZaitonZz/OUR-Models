@@ -39,7 +39,7 @@ from PIL import Image
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 ROIS       = ["header", "body", "footer"]
 EMB_DIM    = 1280       # EfficientNet-B0 output dim — do not change
-THRESHOLD  = 0.380      # best_threshold from metrics_roi_max.json
+THRESHOLD  = 0.340      # best_threshold from metrics_roi_max.json
 IMG_SIZE   = 224
 BATCH_SIZE = 32
 
