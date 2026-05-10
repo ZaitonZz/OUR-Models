@@ -1,5 +1,4 @@
 from pathlib import Path
-from functools import lru_cache
 
 import cv2
 import requests
@@ -8,7 +7,7 @@ from django.conf import settings
 from django.utils.text import get_valid_filename
 
 from .models import ImageJob
-from .inference import TORInference
+from .model_registry import get_detector, get_model_config, model_metadata
 from .ocr import extract_degree_from_image
 from .preprocessing_pipeline import DocumentPreprocessor
 from .signature_verification import verify_signatures
@@ -36,7 +35,7 @@ def process_image_job(job: ImageJob, request=None, expected_signatures: dict | N
             'skew_status': preprocessing_result.skew_status,
             'patch_counts': preprocessing_result.patch_counts,
         }
-        inference_result = run_models(preprocessing_result.patches)
+        inference_result = run_models(preprocessing_result.patches, model_key=job.model_key)
         if not inference_result['success']:
             raise ValueError(inference_result.get('error') or 'Inference failed.')
 
@@ -115,11 +114,13 @@ def build_result_payload(job: ImageJob, request=None) -> dict:
             preprocessed_image_url = request.build_absolute_uri(job.preprocessed_image.url)
 
     preprocessing = job.preprocessing or {}
+    metadata = model_metadata(job.model_key)
 
     return {
         'external_id': job.external_id,
         'job_id': job.pk,
         'status': job.status,
+        **metadata,
         'original_image_url': image_url,
         'preprocessed_image_url': preprocessed_image_url,
         'method': preprocessing.get('method', ''),
@@ -130,23 +131,15 @@ def build_result_payload(job: ImageJob, request=None) -> dict:
     }
 
 
-@lru_cache(maxsize=1)
-def get_detector() -> TORInference:
-    device = settings.TOR_INFERENCE_DEVICE or None
-    return TORInference(
-        weights_path=settings.TOR_MODEL_WEIGHTS_PATH,
-        threshold=settings.TOR_INFERENCE_THRESHOLD,
-        device=device,
-    )
-
-
-def run_models(patches: list) -> dict:
-    inference_result = get_detector().predict(patches)
+def run_models(patches: list, model_key: str) -> dict:
+    config = get_model_config(model_key)
+    inference_result = get_detector(config.key).predict(patches)
     return {
         'success': inference_result.success,
         'label': inference_result.label,
         'score': inference_result.score,
         'roi_scores': inference_result.roi_scores,
         'top_roi': inference_result.top_roi,
+        **model_metadata(config.key),
         'error': inference_result.error or '',
     }

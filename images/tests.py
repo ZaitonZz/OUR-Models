@@ -91,6 +91,21 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(ImageJob.objects.count(), 0)
 
+    def test_upload_api_rejects_unknown_model_key(self):
+        response = self.client.post(
+            '/api/images/',
+            {
+                'image': self.make_image_upload(),
+                'external_id': 'website-unknown-model',
+                'model_key': 'unknown_model',
+            },
+            HTTP_X_TOR_SERVICE_TOKEN='test-token',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(ImageJob.objects.count(), 0)
+        self.assertIn('Unknown model_key', response.json()['error'])
+
     @patch('images.services.requests.post')
     @patch('images.services.extract_degree_from_image')
     @patch('images.services.verify_signatures')
@@ -117,6 +132,8 @@ class ImageUploadApiTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(ImageJob.objects.get().callback_url, '')
+        self.assertEqual(ImageJob.objects.get().model_key, 'efficientnet_b0')
+        self.assertEqual(response.json()['model_key'], 'efficientnet_b0')
         mock_post.assert_not_called()
 
     def test_upload_api_rejects_duplicate_external_id(self):
@@ -159,6 +176,7 @@ class ImageUploadApiTests(TestCase):
                 'image': upload,
                 'external_id': 'website-1',
                 'callback_url': 'https://example.com/api/results',
+                'model_key': 'resnet50_mean',
                 'expected_signatures': json.dumps(self.expected_signatures()),
             },
             HTTP_X_TOR_SERVICE_TOKEN='test-token',
@@ -168,6 +186,7 @@ class ImageUploadApiTests(TestCase):
         payload = response.json()
         job = ImageJob.objects.get(pk=payload['id'])
         self.assertEqual(job.external_id, 'website-1')
+        self.assertEqual(job.model_key, 'resnet50_mean')
         self.assertEqual(job.status, ImageJob.Status.COMPLETE)
         self.assertTrue(job.preprocessed_image.name)
         self.assertEqual(job.preprocessing['method'], 'brightness')
@@ -175,6 +194,8 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(job.preprocessing['patch_counts']['body'], 2)
         self.assertEqual(job.result['label'], 'genuine')
         self.assertEqual(job.result['score'], 0.1234)
+        self.assertEqual(job.result['model_key'], 'resnet50_mean')
+        self.assertEqual(job.result['model_label'], 'ResNet50 mean aggregation')
         self.assertTrue(job.result['signature_verification']['success'])
         self.assertEqual(
             job.result['degree_extraction']['degree'],
@@ -185,6 +206,10 @@ class ImageUploadApiTests(TestCase):
             'Judito T. Abadia',
         )
         self.assertIn('/media/preprocessed/', payload['preprocessed_image_url'])
+        self.assertEqual(payload['model_key'], 'resnet50_mean')
+        self.assertEqual(payload['model_label'], 'ResNet50 mean aggregation')
+        self.assertEqual(payload['model_threshold'], 0.34)
+        mock_get_detector.assert_called_once_with('resnet50_mean')
         mock_get_detector.return_value.predict.assert_called_once()
         mock_verify_signatures.assert_called_once()
         mock_extract_degree.assert_called_once()
@@ -200,6 +225,8 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(callback_payload['external_id'], 'website-1')
         self.assertEqual(callback_payload['job_id'], payload['id'])
         self.assertEqual(callback_payload['status'], ImageJob.Status.COMPLETE)
+        self.assertEqual(callback_payload['model_key'], 'resnet50_mean')
+        self.assertEqual(callback_payload['model_label'], 'ResNet50 mean aggregation')
         self.assertIn('/media/preprocessed/', callback_payload['preprocessed_image_url'])
         self.assertEqual(callback_payload['method'], 'brightness')
         self.assertEqual(callback_payload['patch_counts']['body'], 2)
@@ -304,6 +331,8 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['external_id'], 'website-1')
+        self.assertEqual(payload['model_key'], 'efficientnet_b0')
+        self.assertEqual(payload['model_label'], 'EfficientNet-B0 baseline')
         self.assertEqual(payload['preprocessing']['method'], 'brightness')
         self.assertEqual(payload['result']['label'], 'genuine')
 

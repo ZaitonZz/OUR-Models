@@ -10,6 +10,7 @@ class ImageJob(models.Model):
         FAILED = 'failed', 'Failed'
 
     external_id = models.CharField(max_length=255, unique=True, db_index=True)
+    model_key = models.CharField(max_length=64, default='efficientnet_b0')
     image = models.ImageField(upload_to='uploads/%Y/%m/%d/')
     preprocessed_image = models.ImageField(upload_to='preprocessed/%Y/%m/%d/', blank=True)
     callback_url = models.URLField(blank=True)

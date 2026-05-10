@@ -7,6 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .models import ImageJob
+from .model_registry import DEFAULT_MODEL_KEY, get_model_config, model_metadata, normalize_model_key
 from .services import process_image_job
 
 
@@ -40,6 +41,10 @@ def expected_signatures_from_request(request):
     }
 
 
+def model_key_from_request(request):
+    return normalize_model_key(request.POST.get('model_key', DEFAULT_MODEL_KEY))
+
+
 def upload_page(request):
     latest_jobs = ImageJob.objects.order_by('-created_at')[:10]
 
@@ -48,6 +53,19 @@ def upload_page(request):
         external_id = request.POST.get('external_id', '').strip()
         callback_url = request.POST.get('callback_url', '').strip()
         expected_signatures = expected_signatures_from_request(request)
+        model_key = model_key_from_request(request)
+        try:
+            get_model_config(model_key)
+        except ValueError as exc:
+            return render(
+                request,
+                'images/upload.html',
+                {
+                    'latest_jobs': latest_jobs,
+                    'error': str(exc),
+                },
+                status=400,
+            )
         if not image_file or not external_id or not callback_url:
             return render(
                 request,
@@ -73,6 +91,7 @@ def upload_page(request):
             image=image_file,
             external_id=external_id,
             callback_url=callback_url,
+            model_key=model_key,
         )
         process_image_job(job, request=request, expected_signatures=expected_signatures)
         return redirect('image_detail', pk=job.pk)
@@ -95,6 +114,11 @@ def image_upload_api(request):
     external_id = request.POST.get('external_id', '').strip()
     callback_url = request.POST.get('callback_url', '').strip()
     expected_signatures = expected_signatures_from_request(request)
+    model_key = model_key_from_request(request)
+    try:
+        get_model_config(model_key)
+    except ValueError as exc:
+        return JsonResponse({'error': str(exc)}, status=400)
     missing_fields = [
         field_name
         for field_name, value in {
@@ -118,6 +142,7 @@ def image_upload_api(request):
         image=image_file,
         external_id=external_id,
         callback_url=callback_url,
+        model_key=model_key,
     )
     process_image_job(job, request=request, expected_signatures=expected_signatures)
 
@@ -126,6 +151,7 @@ def image_upload_api(request):
         'job_id': job.pk,
         'external_id': job.external_id,
         'status': job.status,
+        **model_metadata(job.model_key),
         'original_image_url': request.build_absolute_uri(job.image.url),
         'preprocessed_image_url': (
             request.build_absolute_uri(job.preprocessed_image.url)
@@ -151,6 +177,7 @@ def image_status_api(request, pk):
             'job_id': job.pk,
             'external_id': job.external_id,
             'status': job.status,
+            **model_metadata(job.model_key),
             'original_image_url': request.build_absolute_uri(job.image.url),
             'preprocessed_image_url': (
                 request.build_absolute_uri(job.preprocessed_image.url)
