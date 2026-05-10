@@ -40,6 +40,14 @@ SIGNATURE_CONFIG = {
 }
 CANVAS_W = 640
 CANVAS_H = 360
+CANVAS_FIT_SCALE = 0.78
+CANVAS_PAD_RATIO = 0.08
+GENUINE_SCORE_THRESHOLD = 0.60
+SUSPICIOUS_SCORE_THRESHOLD = 0.35
+PRESENCE_MIN_INK_PIXELS = 32
+PRESENCE_MIN_COMPONENT_AREA = 16
+PRESENCE_MIN_INK_RATIO = 0.0008
+PRESENCE_MAX_INK_RATIO = 0.35
 
 _transform = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -170,6 +178,14 @@ def match_signature(
             if reference['personnel_id'] == expected_id
         ]
 
+    candidate_pack = preprocess_signature_for_model(
+        signature.ink_mask,
+        is_tor_extracted=True,
+        apply_16x9=True,
+        suppress_printed_letters=True,
+    )
+    signature.ink_mask = candidate_pack['processed_mask']
+    signature.ink_pixels = int(candidate_pack['presence']['ink_pixels'])
     band_url, mask_url = save_signature_artifacts(signature, external_id, request)
 
     if not references:
@@ -181,7 +197,12 @@ def match_signature(
             'best_match_id': None,
             'best_match_name': None,
             'distance': None,
+            'score': None,
+            'verdict': None,
             'is_match': False,
+            'model_inference_ran': False,
+            'presence': candidate_pack['presence'],
+            'preprocess': candidate_pack['preprocess'],
             'ink_pixels': signature.ink_pixels,
             'bbox_xywh': signature.bbox_xywh,
             'band_crop_url': band_url,
@@ -193,7 +214,36 @@ def match_signature(
             ),
         }
 
-    embedding = embed_image(signature.ink_mask)
+    if not candidate_pack['presence']['passed']:
+        invalid_payload = candidate_presence_failure_to_payload(candidate_pack['presence'], threshold)
+
+        return {
+            'slot': signature.slot,
+            'label': signature.label,
+            'expected_match_id': expected_id,
+            'expected_match_name': expected_name,
+            'best_match_id': None,
+            'best_match_name': None,
+            'distance': invalid_payload['distance'],
+            'score': invalid_payload['score'],
+            'verdict': invalid_payload['verdict'],
+            'status': invalid_payload['status'],
+            'reason': invalid_payload['reason'],
+            'message': invalid_payload['message'],
+            'signature_detected': invalid_payload['signature_detected'],
+            'is_match': False,
+            'model_inference_ran': invalid_payload['model_inference_ran'],
+            'presence': candidate_pack['presence'],
+            'presence_failure_detail': invalid_payload['presence_failure_detail'],
+            'preprocess': candidate_pack['preprocess'],
+            'ink_pixels': signature.ink_pixels,
+            'bbox_xywh': signature.bbox_xywh,
+            'band_crop_url': band_url,
+            'ink_mask_url': mask_url,
+            'error': invalid_payload['message'],
+        }
+
+    embedding = embed_preprocessed_signature(candidate_pack['model_mask'])
     best = min(
         references,
         key=lambda reference: float(torch.dist(embedding, reference['embedding']).item()),
@@ -213,6 +263,10 @@ def match_signature(
         'score': round(score, 4),
         'verdict': verdict,
         'is_match': verdict == 'GENUINE',
+        'model_inference_ran': True,
+        'signature_detected': True,
+        'presence': candidate_pack['presence'],
+        'preprocess': candidate_pack['preprocess'],
         'ink_pixels': signature.ink_pixels,
         'bbox_xywh': signature.bbox_xywh,
         'band_crop_url': band_url,
@@ -267,7 +321,7 @@ def get_reference_index() -> dict:
                 continue
 
             for image_path in reference_image_paths(person_dir):
-                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
                 if image is None:
                     continue
 
@@ -294,12 +348,18 @@ def embed_image(image: np.ndarray) -> torch.Tensor:
     if image is None or image.size == 0:
         raise ValueError('Cannot embed an empty signature image.')
 
-    if len(image.shape) == 3:
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    pack = preprocess_signature_for_model(
+        image,
+        is_tor_extracted=False,
+        apply_16x9=False,
+        suppress_printed_letters=False,
+    )
 
-    mask = to_white_ink_mask(image)
-    normalized = center_on_16x9_canvas(mask)
-    rgb = cv2.cvtColor(normalized, cv2.COLOR_GRAY2RGB)
+    return embed_preprocessed_signature(pack['model_mask'])
+
+
+def embed_preprocessed_signature(model_mask: np.ndarray) -> torch.Tensor:
+    rgb = cv2.cvtColor(model_mask, cv2.COLOR_GRAY2RGB)
     tensor = _transform(Image.fromarray(rgb)).unsqueeze(0)
     model = get_signature_model()
     device = next(model.parameters()).device
@@ -334,6 +394,8 @@ def extract_state_dict(checkpoint: Any) -> dict[str, torch.Tensor]:
 def to_white_ink_mask(image: np.ndarray) -> np.ndarray:
     gray = image.copy()
     if len(gray.shape) == 3:
+        if gray.shape[2] == 4:
+            gray = cv2.cvtColor(gray, cv2.COLOR_BGRA2BGR)
         gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
 
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -343,30 +405,266 @@ def to_white_ink_mask(image: np.ndarray) -> np.ndarray:
     else:
         _threshold, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    return remove_tiny_components(mask, min_area=18)
+    return remove_tiny_components(mask, min_area=5)
 
 
-def center_on_16x9_canvas(mask: np.ndarray, margin: float = 0.14) -> np.ndarray:
-    ys, xs = np.where(mask > 0)
+def signature_presence_gate(
+    mask: np.ndarray,
+    min_ink_pixels: int = PRESENCE_MIN_INK_PIXELS,
+    min_component_area: int = PRESENCE_MIN_COMPONENT_AREA,
+    min_ink_ratio: float = PRESENCE_MIN_INK_RATIO,
+    max_ink_ratio: float = PRESENCE_MAX_INK_RATIO,
+) -> dict:
+    if mask is None or mask.size == 0:
+        return {
+            'passed': False,
+            'reason': 'empty mask',
+            'ink_pixels': 0,
+            'ink_ratio': 0.0,
+            'max_component_area': 0,
+            'signature_like_components': 0,
+        }
+
+    binary = (mask > 0).astype(np.uint8) * 255
+    height, width = binary.shape[:2]
+    total_pixels = max(1, height * width)
+    ink_pixels = int(np.count_nonzero(binary))
+    ink_ratio = float(ink_pixels / total_pixels)
+
+    if ink_pixels < min_ink_pixels:
+        return {
+            'passed': False,
+            'reason': f'too little ink ({ink_pixels}px)',
+            'ink_pixels': ink_pixels,
+            'ink_ratio': round(ink_ratio, 6),
+            'max_component_area': 0,
+            'signature_like_components': 0,
+        }
+
+    if ink_ratio < min_ink_ratio:
+        return {
+            'passed': False,
+            'reason': f'ink ratio too low ({ink_ratio:.6f})',
+            'ink_pixels': ink_pixels,
+            'ink_ratio': round(ink_ratio, 6),
+            'max_component_area': 0,
+            'signature_like_components': 0,
+        }
+
+    if ink_ratio > max_ink_ratio:
+        return {
+            'passed': False,
+            'reason': f'ink ratio too high / noisy text region ({ink_ratio:.6f})',
+            'ink_pixels': ink_pixels,
+            'ink_ratio': round(ink_ratio, 6),
+            'max_component_area': 0,
+            'signature_like_components': 0,
+        }
+
+    num_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats(binary, 8)
+    max_area = 0
+    signature_like_components = 0
+
+    for label_id in range(1, num_labels):
+        comp_w = int(stats[label_id, cv2.CC_STAT_WIDTH])
+        comp_h = int(stats[label_id, cv2.CC_STAT_HEIGHT])
+        area = int(stats[label_id, cv2.CC_STAT_AREA])
+        max_area = max(max_area, area)
+        fill = area / float(max(1, comp_w * comp_h))
+        long_or_tall = (comp_w >= width * 0.08) or (comp_h >= height * 0.08)
+        sparse_stroke = fill < 0.70
+
+        if area >= min_component_area and long_or_tall and sparse_stroke:
+            signature_like_components += 1
+
+    if max_area < min_component_area:
+        return {
+            'passed': False,
+            'reason': f'no strong handwriting component (max_area={max_area})',
+            'ink_pixels': ink_pixels,
+            'ink_ratio': round(ink_ratio, 6),
+            'max_component_area': max_area,
+            'signature_like_components': signature_like_components,
+        }
+
+    if signature_like_components == 0:
+        return {
+            'passed': False,
+            'reason': 'no signature-like stroke component',
+            'ink_pixels': ink_pixels,
+            'ink_ratio': round(ink_ratio, 6),
+            'max_component_area': max_area,
+            'signature_like_components': signature_like_components,
+        }
+
+    return {
+        'passed': True,
+        'reason': 'signature-like ink present',
+        'ink_pixels': ink_pixels,
+        'ink_ratio': round(ink_ratio, 6),
+        'max_component_area': max_area,
+        'signature_like_components': signature_like_components,
+    }
+
+
+def suppress_printed_letters_from_tor_signature(mask: np.ndarray) -> np.ndarray:
+    bw = (mask > 0).astype(np.uint8) * 255
+    height, width = bw.shape[:2]
+    total = float(max(1, height * width))
+    bw = remove_tiny_components(bw, min_area=max(3, int(total * 0.00003)))
+    num_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats(bw, 8)
+    seed = np.zeros_like(bw, dtype=np.uint8)
+    component_info = []
+
+    for label_id in range(1, num_labels):
+        x = int(stats[label_id, cv2.CC_STAT_LEFT])
+        y = int(stats[label_id, cv2.CC_STAT_TOP])
+        comp_w = int(stats[label_id, cv2.CC_STAT_WIDTH])
+        comp_h = int(stats[label_id, cv2.CC_STAT_HEIGHT])
+        area = int(stats[label_id, cv2.CC_STAT_AREA])
+        fill = area / float(max(1, comp_w * comp_h))
+        aspect = comp_w / float(max(1, comp_h))
+        width_ratio = comp_w / float(max(1, width))
+        height_ratio = comp_h / float(max(1, height))
+        area_ratio = area / total
+        signature_like = (
+            (height_ratio >= 0.30 and fill <= 0.55)
+            or (width_ratio >= 0.26 and height_ratio >= 0.035 and fill <= 0.45)
+            or (aspect >= 3.5 and width_ratio >= 0.18 and fill <= 0.38)
+            or (area_ratio >= 0.010 and fill <= 0.35)
+        )
+
+        if signature_like:
+            seed[labels == label_id] = 255
+
+        component_info.append((
+            label_id,
+            x,
+            y,
+            comp_w,
+            comp_h,
+            area,
+            fill,
+            aspect,
+            width_ratio,
+            height_ratio,
+            area_ratio,
+            signature_like,
+        ))
+
+    if np.count_nonzero(seed) < 10 and component_info:
+        largest = max(component_info, key=lambda item: item[5])
+        seed[labels == largest[0]] = 255
+
+    kernel_width = max(7, int(round(width * 0.055))) | 1
+    kernel_height = max(5, int(round(height * 0.075))) | 1
+    keep_zone = cv2.dilate(
+        seed,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_width, kernel_height)),
+        iterations=1,
+    )
+    output = np.zeros_like(bw, dtype=np.uint8)
+
+    for component in component_info:
+        label_id, _x, _y, _comp_w, _comp_h, _area, fill, aspect, width_ratio, height_ratio, area_ratio, signature_like = component
+        comp = labels == label_id
+        near_anchor = bool(np.any(keep_zone[comp] > 0))
+        blocky_letter = height_ratio <= 0.24 and width_ratio <= 0.24 and fill >= 0.18 and area_ratio <= 0.018
+        tiny_letter_piece = height_ratio <= 0.16 and width_ratio <= 0.16 and area_ratio <= 0.010 and fill >= 0.10
+        word_fragment = (
+            width_ratio >= 0.08
+            and width_ratio <= 0.42
+            and height_ratio <= 0.20
+            and fill >= 0.16
+            and aspect >= 1.2
+        )
+        remove_as_text = (blocky_letter or tiny_letter_piece or word_fragment) and not signature_like
+
+        if remove_as_text:
+            if near_anchor and fill < 0.26 and (width_ratio >= 0.18 or height_ratio >= 0.20):
+                output[comp] = 255
+            continue
+
+        output[comp] = 255
+
+    output = cv2.morphologyEx(
+        output,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+        iterations=1,
+    )
+    final = remove_tiny_components(output, min_area=max(3, int(total * 0.00004)))
+
+    if np.count_nonzero(final) < max(25, int(np.count_nonzero(bw) * 0.18)):
+        return bw
+
+    return final
+
+
+def preprocess_signature_for_model(
+    image: np.ndarray,
+    is_tor_extracted: bool,
+    apply_16x9: bool,
+    suppress_printed_letters: bool,
+) -> dict:
+    binary_mask = to_white_ink_mask(image)
+    processed_mask = binary_mask.copy()
+
+    if is_tor_extracted and suppress_printed_letters:
+        processed_mask = suppress_printed_letters_from_tor_signature(processed_mask)
+
+    presence = signature_presence_gate(processed_mask)
+    model_mask = center_on_16x9_canvas(processed_mask) if apply_16x9 else processed_mask
+
+    return {
+        'binary_mask': binary_mask,
+        'processed_mask': processed_mask,
+        'model_mask': model_mask,
+        'presence': presence,
+        'preprocess': {
+            'is_tor_extracted': is_tor_extracted,
+            'binary_white_ink_on_black': True,
+            'suppress_printed_letters': bool(is_tor_extracted and suppress_printed_letters),
+            'apply_16x9_canvas': bool(apply_16x9),
+            'canvas': f'{CANVAS_W}x{CANVAS_H}' if apply_16x9 else None,
+            'canvas_fit_scale': CANVAS_FIT_SCALE if apply_16x9 else None,
+            'resize': '224x224',
+            'normalize': 'mean=0.5, std=0.5',
+        },
+    }
+
+
+def center_on_16x9_canvas(
+    mask: np.ndarray,
+    fit_scale: float = CANVAS_FIT_SCALE,
+    pad_ratio: float = CANVAS_PAD_RATIO,
+) -> np.ndarray:
+    bw = (mask > 0).astype(np.uint8) * 255
+    ys, xs = np.where(bw > 0)
     canvas = np.zeros((CANVAS_H, CANVAS_W), dtype=np.uint8)
 
     if len(xs) == 0 or len(ys) == 0:
         return canvas
 
-    x1, x2 = int(xs.min()), int(xs.max())
-    y1, y2 = int(ys.min()), int(ys.max())
-    crop = mask[y1:y2 + 1, x1:x2 + 1]
+    x1, x2 = int(xs.min()), int(xs.max()) + 1
+    y1, y2 = int(ys.min()), int(ys.max()) + 1
+    pad = int(round(max(x2 - x1, y2 - y1) * pad_ratio))
+    x1 = max(0, x1 - pad)
+    y1 = max(0, y1 - pad)
+    x2 = min(bw.shape[1], x2 + pad)
+    y2 = min(bw.shape[0], y2 + pad)
+    crop = bw[y1:y2, x1:x2]
     h, w = crop.shape[:2]
 
     if h <= 0 or w <= 0:
         return canvas
 
-    max_w = int(CANVAS_W * (1.0 - 2.0 * margin))
-    max_h = int(CANVAS_H * (1.0 - 2.0 * margin))
+    max_w = max(1, int(round(CANVAS_W * fit_scale)))
+    max_h = max(1, int(round(CANVAS_H * fit_scale)))
     scale = min(max_w / max(w, 1), max_h / max(h, 1))
     new_w = max(1, int(round(w * scale)))
     new_h = max(1, int(round(h * scale)))
-    resized = cv2.resize(crop, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    resized = cv2.resize(crop, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
     x0 = (CANVAS_W - new_w) // 2
     y0 = (CANVAS_H - new_h) // 2
     canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
@@ -382,13 +680,36 @@ def distance_to_score(distance: float, decision_threshold: float) -> float:
 
 
 def score_to_verdict(score: float) -> str:
-    if score >= 0.60:
+    if score >= GENUINE_SCORE_THRESHOLD:
         return 'GENUINE'
 
-    if score <= 0.35:
+    if score <= SUSPICIOUS_SCORE_THRESHOLD:
         return 'SUSPICIOUS'
 
     return 'NEEDS MANUAL REVIEW'
+
+
+def candidate_presence_failure_to_payload(candidate_presence: dict, decision_threshold: float) -> dict:
+    gate_reason = str(candidate_presence.get('reason', 'presence gate failed'))
+
+    return {
+        'verdict': 'INVALID',
+        'status': 'INVALID',
+        'reason': 'no_signature_detected',
+        'message': 'No signature detected in the candidate signature region.',
+        'signature_detected': False,
+        'score': None,
+        'distance': None,
+        'model_inference_ran': False,
+        'presence_failure_detail': gate_reason,
+        'candidate_presence': candidate_presence,
+        'decision_threshold': round(float(decision_threshold), 4),
+        'score_rules': {
+            'genuine': f'score >= {GENUINE_SCORE_THRESHOLD:.2f}',
+            'suspicious': f'score <= {SUSPICIOUS_SCORE_THRESHOLD:.2f}',
+            'needs_manual_review': f'{SUSPICIOUS_SCORE_THRESHOLD:.2f} < score < {GENUINE_SCORE_THRESHOLD:.2f}',
+        },
+    }
 
 
 def scale_bbox_from_base(bbox, img_w, img_h):

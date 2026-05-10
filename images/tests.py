@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import cv2
 import numpy as np
 import torch
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -19,6 +20,10 @@ from .signature_verification import (
     distance_to_score,
     extract_signatures,
     reference_image_paths,
+    score_to_verdict,
+    candidate_presence_failure_to_payload,
+    signature_presence_gate,
+    suppress_printed_letters_from_tor_signature,
     verify_signatures,
 )
 
@@ -449,6 +454,46 @@ class SignatureVerificationTests(TestCase):
 
     def test_distance_threshold_maps_to_half_similarity_score(self):
         self.assertEqual(distance_to_score(distance=0.3771, decision_threshold=0.3771), 0.5)
+
+    def test_signature_presence_gate_rejects_blank_candidate(self):
+        mask = np.zeros((120, 320), dtype=np.uint8)
+        result = signature_presence_gate(mask)
+
+        self.assertFalse(result['passed'])
+        self.assertIn('too little ink', result['reason'])
+
+    def test_candidate_presence_failure_returns_invalid_payload(self):
+        presence = signature_presence_gate(np.zeros((120, 320), dtype=np.uint8))
+        payload = candidate_presence_failure_to_payload(presence, decision_threshold=0.3771)
+
+        self.assertEqual(payload['verdict'], 'INVALID')
+        self.assertEqual(payload['reason'], 'no_signature_detected')
+        self.assertFalse(payload['signature_detected'])
+        self.assertIsNone(payload['score'])
+        self.assertFalse(payload['model_inference_ran'])
+
+    def test_signature_presence_gate_accepts_signature_like_stroke(self):
+        mask = np.zeros((120, 320), dtype=np.uint8)
+        cv2.line(mask, (40, 60), (250, 35), 255, 3)
+        cv2.line(mask, (80, 64), (190, 88), 255, 2)
+        result = signature_presence_gate(mask)
+
+        self.assertTrue(result['passed'])
+        self.assertGreater(result['signature_like_components'], 0)
+
+    def test_score_to_verdict_has_manual_review_band(self):
+        self.assertEqual(score_to_verdict(0.70), 'GENUINE')
+        self.assertEqual(score_to_verdict(0.20), 'SUSPICIOUS')
+        self.assertEqual(score_to_verdict(0.45), 'NEEDS MANUAL REVIEW')
+
+    def test_printed_letter_suppression_preserves_non_empty_signature(self):
+        mask = np.zeros((120, 320), dtype=np.uint8)
+        cv2.putText(mask, 'NAME', (12, 96), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 255, 2)
+        cv2.line(mask, (60, 48), (250, 32), 255, 3)
+
+        cleaned = suppress_printed_letters_from_tor_signature(mask)
+
+        self.assertGreater(np.count_nonzero(cleaned), 0)
 
     def test_reference_image_paths_prefers_genuine_subfolder(self):
         person_dir = Path(TEST_MEDIA_ROOT) / 'references' / 'sig1_prepared_by' / 'abadia'
