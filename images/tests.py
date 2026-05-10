@@ -423,6 +423,69 @@ class ImageUploadApiTests(TestCase):
         }
 
 
+class SignatureReferenceSyncApiTests(TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.references_root = Path(self.temp_dir) / 'references'
+        self.personnel_path = Path(self.temp_dir) / 'signature_personnel.json'
+        self.personnel_path.write_text(
+            json.dumps({
+                'sig1_prepared_by': [],
+                'sig2_checked_by': [],
+                'sig3_certified_by': [],
+            }),
+            encoding='utf-8',
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_signature_reference_sync_rejects_invalid_service_token(self):
+        with override_settings(
+            TOR_SERVICE_TOKEN='test-token',
+            TOR_SIGNATURE_REFERENCES_ROOT=str(self.references_root),
+            TOR_SIGNATURE_PERSONNEL_PATH=str(self.personnel_path),
+        ):
+            response = self.client.post('/api/signature-references/sync/', {
+                'slot': 'sig1_prepared_by',
+                'personnel_id': 'abadia',
+                'personnel_name': 'Judito T. Abadia',
+                'images': [self.make_signature_upload()],
+            })
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_signature_reference_sync_writes_files_and_updates_personnel(self):
+        with override_settings(
+            TOR_SERVICE_TOKEN='test-token',
+            TOR_SIGNATURE_REFERENCES_ROOT=str(self.references_root),
+            TOR_SIGNATURE_PERSONNEL_PATH=str(self.personnel_path),
+        ):
+            response = self.client.post(
+                '/api/signature-references/sync/',
+                {
+                    'slot': 'sig1_prepared_by',
+                    'personnel_id': 'abadia',
+                    'personnel_name': 'Judito T. Abadia',
+                    'images': [self.make_signature_upload('sample.png')],
+                },
+                HTTP_X_TOR_SERVICE_TOKEN='test-token',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            (self.references_root / 'sig1_prepared_by' / 'abadia' / 'genuine' / 'sample.png').exists()
+        )
+
+        personnel = json.loads(self.personnel_path.read_text(encoding='utf-8'))
+        self.assertEqual(personnel['sig1_prepared_by'][0]['id'], 'abadia')
+        self.assertEqual(personnel['sig1_prepared_by'][0]['name'], 'Judito T. Abadia')
+
+    @staticmethod
+    def make_signature_upload(name='signature.png'):
+        return SimpleUploadedFile(name, b'signature-bytes', content_type='image/png')
+
+
 class OcrExtractionTests(TestCase):
     def test_degree_extraction_reads_value_from_next_line(self):
         text = """

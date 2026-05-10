@@ -88,7 +88,7 @@ class SiameseResNet18(nn.Module):
 
 
 def load_personnel() -> dict:
-    path = Path(__file__).with_name('signature_personnel.json')
+    path = Path(getattr(settings, 'TOR_SIGNATURE_PERSONNEL_PATH', Path(__file__).with_name('signature_personnel.json')))
     with open(path, 'r', encoding='utf-8') as handle:
         return json.load(handle)
 

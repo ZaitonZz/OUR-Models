@@ -157,5 +157,9 @@ TOR_SIGNATURE_REFERENCES_ROOT = os.environ.get(
     'TOR_SIGNATURE_REFERENCES_ROOT',
     str(BASE_DIR / 'signature_references'),
 )
+TOR_SIGNATURE_PERSONNEL_PATH = os.environ.get(
+    'TOR_SIGNATURE_PERSONNEL_PATH',
+    str(BASE_DIR / 'images' / 'signature_personnel.json'),
+)
 TOR_SIGNATURE_DISTANCE_THRESHOLD = float(os.environ.get('TOR_SIGNATURE_DISTANCE_THRESHOLD', '0.3771'))
 TOR_SIGNATURE_DEVICE = os.environ.get('TOR_SIGNATURE_DEVICE', '')
