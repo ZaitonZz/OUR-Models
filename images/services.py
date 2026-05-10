@@ -9,6 +9,7 @@ from django.utils.text import get_valid_filename
 
 from .models import ImageJob
 from .inference import TORInference
+from .ocr import extract_degree_from_image
 from .preprocessing_pipeline import DocumentPreprocessor
 from .signature_verification import verify_signatures
 
@@ -45,6 +46,7 @@ def process_image_job(job: ImageJob, request=None, expected_signatures: dict | N
             request=request,
             expected_signatures=expected_signatures or {},
         )
+        inference_result['degree_extraction'] = extract_degree_from_image(preprocessing_result.warped)
 
         job.status = ImageJob.Status.COMPLETE
         job.result = inference_result

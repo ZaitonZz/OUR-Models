@@ -13,6 +13,7 @@ from django.test import TestCase, override_settings
 from PIL import Image
 
 from .models import ImageJob
+from .ocr import extract_degree_from_text
 from .signature_verification import (
     SiameseResNet18,
     distance_to_score,
@@ -86,15 +87,17 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(ImageJob.objects.count(), 0)
 
     @patch('images.services.requests.post')
+    @patch('images.services.extract_degree_from_image')
     @patch('images.services.verify_signatures')
     @patch('images.services.get_detector')
     @patch('images.services.DocumentPreprocessor.load_config')
-    def test_upload_api_allows_missing_callback_url(self, mock_load_config, mock_get_detector, mock_verify_signatures, mock_post):
+    def test_upload_api_allows_missing_callback_url(self, mock_load_config, mock_get_detector, mock_verify_signatures, mock_extract_degree, mock_post):
         mock_load_config.return_value = Mock(run=Mock(return_value=self.make_preprocess_result()))
         mock_get_detector.return_value = Mock(
             predict=Mock(return_value=self.make_inference_result())
         )
         mock_verify_signatures.return_value = self.make_signature_verification()
+        mock_extract_degree.return_value = self.make_degree_extraction()
         upload = self.make_image_upload()
 
         response = self.client.post(
@@ -131,15 +134,17 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(response.status_code, 409)
 
     @patch('images.services.requests.post')
+    @patch('images.services.extract_degree_from_image')
     @patch('images.services.verify_signatures')
     @patch('images.services.get_detector')
     @patch('images.services.DocumentPreprocessor.load_config')
-    def test_upload_api_runs_inference_and_posts_callback(self, mock_load_config, mock_get_detector, mock_verify_signatures, mock_post):
+    def test_upload_api_runs_inference_and_posts_callback(self, mock_load_config, mock_get_detector, mock_verify_signatures, mock_extract_degree, mock_post):
         mock_load_config.return_value = Mock(run=Mock(return_value=self.make_preprocess_result()))
         mock_get_detector.return_value = Mock(
             predict=Mock(return_value=self.make_inference_result())
         )
         mock_verify_signatures.return_value = self.make_signature_verification()
+        mock_extract_degree.return_value = self.make_degree_extraction()
         mock_post.return_value = Mock(status_code=200, text='ok')
         upload = self.make_image_upload()
 
@@ -167,12 +172,17 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(job.result['score'], 0.1234)
         self.assertTrue(job.result['signature_verification']['success'])
         self.assertEqual(
+            job.result['degree_extraction']['degree'],
+            'Bachelor of Science in Information Technology',
+        )
+        self.assertEqual(
             job.result['signature_verification']['signatures'][0]['best_match_name'],
             'Judito T. Abadia',
         )
         self.assertIn('/media/preprocessed/', payload['preprocessed_image_url'])
         mock_get_detector.return_value.predict.assert_called_once()
         mock_verify_signatures.assert_called_once()
+        mock_extract_degree.assert_called_once()
         self.assertEqual(
             mock_verify_signatures.call_args.kwargs['expected_signatures'],
             self.expected_signatures(),
@@ -191,6 +201,10 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(callback_payload['result']['label'], 'genuine')
         self.assertEqual(callback_payload['result']['top_roi'], 'footer')
         self.assertTrue(callback_payload['result']['signature_verification']['success'])
+        self.assertEqual(
+            callback_payload['result']['degree_extraction']['degree'],
+            'Bachelor of Science in Information Technology',
+        )
         self.assertEqual(payload['callback_status_code'], 200)
 
     @patch('images.services.requests.post')
@@ -361,6 +375,40 @@ class ImageUploadApiTests(TestCase):
             ],
             'error': '',
         }
+
+    @staticmethod
+    def make_degree_extraction():
+        return {
+            'success': True,
+            'degree': 'Bachelor of Science in Information Technology',
+            'title': 'Bachelor of Science in Information Technology',
+            'course': 'Bachelor of Science in Information Technology',
+            'program_match': None,
+            'message': 'Degree extracted from TOR OCR.',
+            'raw_text': 'Degree/Title/Course:\nBachelor of Science in Information Technology',
+        }
+
+
+class OcrExtractionTests(TestCase):
+    def test_degree_extraction_reads_value_from_next_line(self):
+        text = """
+        Name: Juan Dela Cruz
+        Degree/Title/Course:
+        Bachelor of Science in Information Technology
+        """
+
+        self.assertEqual(
+            extract_degree_from_text(text),
+            'Bachelor of Science in Information Technology',
+        )
+
+    def test_degree_extraction_reads_inline_value(self):
+        text = 'Degree/Title/Course: Bachelor of Science in Computer Science'
+
+        self.assertEqual(
+            extract_degree_from_text(text),
+            'Bachelor of Science in Computer Science',
+        )
 
 
 class SignatureVerificationTests(TestCase):
