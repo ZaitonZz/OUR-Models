@@ -1,6 +1,6 @@
 # OUR Models
 
-A small Django service for receiving image uploads from a website and processing them with model code.
+A small Django service for receiving image uploads from a website, preprocessing TOR document images, and notifying the website when preprocessing is complete.
 
 ## Setup
 
@@ -15,33 +15,36 @@ Open `http://127.0.0.1:8000/` for the upload form.
 
 ## Upload API
 
-Send `multipart/form-data` to `POST /api/images/` with the file field named `image`.
+Send `multipart/form-data` to `POST /api/images/` with:
+
+- `image`: uploaded image file.
+- `external_id`: unique id owned by the website.
+- `callback_url`: website endpoint Django should notify after preprocessing.
 
 ```powershell
-curl.exe -F "image=@C:\path\to\photo.jpg" http://127.0.0.1:8000/api/images/
+curl.exe -F "image=@C:\path\to\photo.jpg" -F "external_id=upload-123" -F "callback_url=https://example.com/api/results" http://127.0.0.1:8000/api/images/
 ```
 
-To have this app POST the processed result to another API, include `callback_url`:
+The upload response includes the Django `job_id`, the website `external_id`, preprocessing status, and the preprocessed image URL.
 
-```powershell
-curl.exe -F "image=@C:\path\to\photo.jpg" -F "callback_url=https://example.com/api/results" http://127.0.0.1:8000/api/images/
-```
+## Preprocessing callback
 
-Or set a default callback endpoint before running the server:
-
-```powershell
-$env:RESULTS_API_URL = "https://example.com/api/results"
-.\.venv\Scripts\python manage.py runserver
-```
-
-The callback JSON looks like:
+After preprocessing finishes, Django POSTs JSON to `callback_url`:
 
 ```json
 {
-  "id": 1,
-  "status": "complete",
-  "image_url": "http://127.0.0.1:8000/media/uploads/...",
-  "result": {},
+  "external_id": "upload-123",
+  "job_id": 1,
+  "status": "preprocessed",
+  "original_image_url": "http://127.0.0.1:8000/media/uploads/...",
+  "preprocessed_image_url": "http://127.0.0.1:8000/media/preprocessed/...",
+  "method": "brightness",
+  "skew_status": "flat",
+  "patch_counts": {
+    "header": 0,
+    "body": 0,
+    "footer": 0
+  },
   "error": ""
 }
 ```
@@ -54,4 +57,4 @@ GET /api/images/<id>/
 
 ## Model hook
 
-Put your model pipeline in `images/services.py` inside `run_models(image_path)`. Return a JSON-serializable dictionary so Django can save it and return it from the API.
+`patch_baseline_final.pth` is not run yet. The current flow stops after preprocessing and callback notification. The next phase can feed the transient patches from `images/preprocessing_pipeline.py` into the model.

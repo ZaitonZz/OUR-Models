@@ -3,6 +3,8 @@ certifi==2026.4.22
 charset-normalizer==3.4.7
 Django==6.0.5
 idna==3.13
+numpy==2.4.4
+opencv-python==4.13.0.92
 packaging==26.2
 pillow==12.2.0
 requests==2.33.1

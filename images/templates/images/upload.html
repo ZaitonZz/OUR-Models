@@ -24,22 +24,27 @@
       <input id="image" type="file" name="image" accept="image/*" required>
     </p>
     <p>
+      <label for="external_id">Website external ID</label><br>
+      <input id="external_id" type="text" name="external_id" placeholder="website-upload-id" style="width: 100%; max-width: 520px;" required>
+    </p>
+    <p>
       <label for="callback_url">Result callback URL</label><br>
-      <input id="callback_url" type="url" name="callback_url" placeholder="https://example.com/api/results" style="width: 100%; max-width: 520px;">
+      <input id="callback_url" type="url" name="callback_url" placeholder="https://example.com/api/results" style="width: 100%; max-width: 520px;" required>
     </p>
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
     <button type="submit">Upload and process</button>
   </form>
 
   <h2>Website API</h2>
-  <p>Send a multipart POST request to <code>/api/images/</code> with the file field named <code>image</code>. Add <code>callback_url</code> when the result should be posted to a specific endpoint.</p>
-  <pre>curl -F "image=@path/to/photo.jpg" -F "callback_url=https://example.com/api/results" http://127.0.0.1:8000/api/images/</pre>
+  <p>Send a multipart POST request to <code>/api/images/</code> with <code>image</code>, <code>external_id</code>, and <code>callback_url</code>.</p>
+  <pre>curl -F "image=@path/to/photo.jpg" -F "external_id=upload-123" -F "callback_url=https://example.com/api/results" http://127.0.0.1:8000/api/images/</pre>
 
   <h2>Latest jobs</h2>
   <div class="jobs">
     {% for job in latest_jobs %}
       <div class="job">
         <a href="{% url 'image_detail' job.pk %}">Job #{{ job.pk }}</a>
+        <span>{{ job.external_id }}</span>
         <strong>{{ job.status }}</strong>
         <div>{{ job.created_at }}</div>
       </div>

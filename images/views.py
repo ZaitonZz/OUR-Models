@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
@@ -13,16 +12,34 @@ def upload_page(request):
 
     if request.method == 'POST':
         image_file = request.FILES.get('image')
-        if not image_file:
+        external_id = request.POST.get('external_id', '').strip()
+        callback_url = request.POST.get('callback_url', '').strip()
+        if not image_file or not external_id or not callback_url:
             return render(
                 request,
                 'images/upload.html',
-                {'latest_jobs': latest_jobs, 'error': 'Choose an image to upload.'},
+                {
+                    'latest_jobs': latest_jobs,
+                    'error': 'Choose an image and provide external_id plus callback_url.',
+                },
                 status=400,
             )
+        if ImageJob.objects.filter(external_id=external_id).exists():
+            return render(
+                request,
+                'images/upload.html',
+                {
+                    'latest_jobs': latest_jobs,
+                    'error': 'A job already exists for that external_id.',
+                },
+                status=409,
+            )
 
-        callback_url = request.POST.get('callback_url', '').strip()
-        job = ImageJob.objects.create(image=image_file, callback_url=callback_url)
+        job = ImageJob.objects.create(
+            image=image_file,
+            external_id=external_id,
+            callback_url=callback_url,
+        )
         process_image_job(job, request=request)
         return redirect('image_detail', pk=job.pk)
 
@@ -38,24 +55,54 @@ def image_detail(request, pk):
 @require_http_methods(['POST'])
 def image_upload_api(request):
     image_file = request.FILES.get('image')
-    if not image_file:
-        return JsonResponse({'error': 'Upload an image file using the "image" field.'}, status=400)
-
+    external_id = request.POST.get('external_id', '').strip()
     callback_url = request.POST.get('callback_url', '').strip()
-    job = ImageJob.objects.create(image=image_file, callback_url=callback_url)
+    missing_fields = [
+        field_name
+        for field_name, value in {
+            'image': image_file,
+            'external_id': external_id,
+            'callback_url': callback_url,
+        }.items()
+        if not value
+    ]
+    if missing_fields:
+        return JsonResponse(
+            {'error': f'Missing required field(s): {", ".join(missing_fields)}.'},
+            status=400,
+        )
+    if ImageJob.objects.filter(external_id=external_id).exists():
+        return JsonResponse(
+            {'error': 'A job already exists for that external_id.'},
+            status=409,
+        )
+
+    job = ImageJob.objects.create(
+        image=image_file,
+        external_id=external_id,
+        callback_url=callback_url,
+    )
     process_image_job(job, request=request)
 
     response = {
         'id': job.pk,
+        'job_id': job.pk,
+        'external_id': job.external_id,
         'status': job.status,
-        'image_url': request.build_absolute_uri(job.image.url),
+        'original_image_url': request.build_absolute_uri(job.image.url),
+        'preprocessed_image_url': (
+            request.build_absolute_uri(job.preprocessed_image.url)
+            if job.preprocessed_image
+            else ''
+        ),
+        'preprocessing': job.preprocessing,
         'result': job.result,
         'error': job.error,
-        'callback_url': job.callback_url or settings.RESULTS_API_URL,
+        'callback_url': job.callback_url,
         'callback_status_code': job.callback_status_code,
         'callback_error': job.callback_error,
     }
-    status = 201 if job.status == ImageJob.Status.COMPLETE else 422
+    status = 201 if job.status == ImageJob.Status.PREPROCESSED else 422
     return JsonResponse(response, status=status)
 
 
@@ -64,11 +111,19 @@ def image_status_api(request, pk):
     return JsonResponse(
         {
             'id': job.pk,
+            'job_id': job.pk,
+            'external_id': job.external_id,
             'status': job.status,
-            'image_url': request.build_absolute_uri(job.image.url),
+            'original_image_url': request.build_absolute_uri(job.image.url),
+            'preprocessed_image_url': (
+                request.build_absolute_uri(job.preprocessed_image.url)
+                if job.preprocessed_image
+                else ''
+            ),
+            'preprocessing': job.preprocessing,
             'result': job.result,
             'error': job.error,
-            'callback_url': job.callback_url or settings.RESULTS_API_URL,
+            'callback_url': job.callback_url,
             'callback_status_code': job.callback_status_code,
             'callback_error': job.callback_error,
             'created_at': job.created_at.isoformat(),

@@ -15,10 +15,9 @@
 <body>
   <p><a href="{% url 'upload_page' %}">Back to uploads</a></p>
   <h1>Image Job #{{ job.pk }}</h1>
+  <p>External ID: <strong>{{ job.external_id }}</strong></p>
   <p>Status: <strong>{{ job.status }}</strong></p>
-  {% if job.callback_url %}
-    <p>Callback: <code>{{ job.callback_url }}</code></p>
-  {% endif %}
+  <p>Callback: <code>{{ job.callback_url }}</code></p>
   {% if job.callback_status_code %}
     <p>Callback status: <strong>{{ job.callback_status_code }}</strong></p>
   {% endif %}
@@ -26,6 +25,10 @@
     <p class="error">Callback error: {{ job.callback_error }}</p>
   {% endif %}
   <img src="{{ job.image.url }}" alt="Uploaded image">
+  {% if job.preprocessed_image %}
+    <h2>Preprocessed Image</h2>
+    <img src="{{ job.preprocessed_image.url }}" alt="Preprocessed image">
+  {% endif %}
 
   {% if job.error %}
     <h2>Error</h2>
@@ -33,6 +36,7 @@
   {% endif %}
 
   <h2>Result</h2>
+  <pre>{{ job.preprocessing }}</pre>
   <pre>{{ job.result }}</pre>
 
   <h2>Status API</h2>
