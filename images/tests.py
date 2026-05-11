@@ -592,6 +592,34 @@ class OcrExtractionTests(TestCase):
             'Bachelor of Science in Computer Science',
         )
 
+    def test_degree_extraction_finds_label_after_ocr_prefix_noise(self):
+        text = 'random OCR noise Degree/Title/Course: Bachelor of Science in Accountancy'
+
+        self.assertEqual(
+            extract_degree_from_text(text),
+            'Bachelor of Science in Accountancy',
+        )
+
+    def test_degree_extraction_ignores_short_noise(self):
+        text = """
+        Degree/Title/Course:
+        B.S._
+        Bachelor of Science in Information Systems
+        """
+
+        self.assertEqual(
+            extract_degree_from_text(text),
+            'Bachelor of Science in Information Systems',
+        )
+
+    def test_degree_extraction_strips_trailing_noise(self):
+        text = 'Degree/Title/Course: Bachelor of Science in Psychology ..__'
+
+        self.assertEqual(
+            extract_degree_from_text(text),
+            'Bachelor of Science in Psychology',
+        )
+
 
 class SignatureVerificationTests(TestCase):
     def test_siamese_checkpoint_loads_when_present(self):

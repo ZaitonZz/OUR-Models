@@ -6,7 +6,7 @@ import numpy as np
 
 
 DEGREE_LABEL_PATTERN = re.compile(
-    r'^\s*degree\s*(?:/|\s)+title\s*(?:/|\s)+course\s*:?\s*(?P<inline>.*)$',
+    r'degree\s*(?:/|\s)+title\s*(?:/|\s)+course\s*:?\s*(?P<inline>.*)$',
     re.IGNORECASE,
 )
 
@@ -52,14 +52,14 @@ def prepare_degree_region(document_image: np.ndarray) -> np.ndarray:
         return document_image
 
     height, width = document_image.shape[:2]
-    top = int(height * 0.06)
-    bottom = int(height * 0.38)
-    left = int(width * 0.04)
-    right = int(width * 0.96)
+    top = int(height * 0.10)
+    bottom = int(height * 0.20)
+    left = int(width * 0.35)
+    right = int(width * 0.98)
     region = document_image[top:bottom, left:right]
 
     gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if region.ndim == 3 else region
-    scaled = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    scaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
     denoised = cv2.fastNlMeansDenoising(scaled, None, 12, 7, 21)
 
     return cv2.adaptiveThreshold(
@@ -77,7 +77,7 @@ def extract_degree_from_text(text: str) -> str:
     lines = [line for line in lines if line]
 
     for index, line in enumerate(lines):
-        match = DEGREE_LABEL_PATTERN.match(line)
+        match = DEGREE_LABEL_PATTERN.search(line)
         if not match:
             continue
 
@@ -99,9 +99,10 @@ def normalize_ocr_line(line: str) -> str:
 
 def clean_degree_value(value: str) -> str:
     value = re.sub(r'^[\s:.\-]+', '', value)
+    value = re.sub(r'[\s\-_.]+$', '', value)
     value = re.sub(r'\s+', ' ', value).strip()
 
-    return value
+    return value if len(value) >= 8 else ''
 
 
 def unavailable_result(message: str) -> dict[str, Any]:
