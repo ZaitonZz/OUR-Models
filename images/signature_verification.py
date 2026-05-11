@@ -22,21 +22,27 @@ SLOTS = {
 BASE_W = 1024
 BASE_H = 1536
 MANUAL_PIXEL_BBOXES_1024X1536 = {
-    'sig1_prepared_by': (78, 1332, 250, 126),
-    'sig2_checked_by': (420, 1322, 245, 158),
-    'sig3_certified_by': (730, 1332, 255, 126),
+    'sig1_prepared_by': (55, 1308, 335, 170),
+    'sig2_checked_by': (360, 1296, 355, 205),
+    'sig3_certified_by': (650, 1308, 340, 170),
 }
 SIGNATURE_BAND_FRAC = {
-    'sig1_prepared_by': (0.00, 0.70),
+    'sig1_prepared_by': (0.00, 1.00),
     'sig2_checked_by': (0.00, 1.00),
-    'sig3_certified_by': (0.00, 0.70),
+    'sig3_certified_by': (0.00, 1.00),
 }
 SIGNATURE_CONFIG = {
-    'safe_band_top_offset_px_1024x1536': 18,
-    'safe_band_h_sig1_sig3_px_1024x1536': 95,
-    'safe_band_h_sig2_px_1024x1536': 140,
-    'safe_band_widen_px_1024x1536': 24,
-    'fallback_signature_y_frac': 0.845,
+    'safe_band_top_offset_px_1024x1536': -18,
+    'safe_band_h_sig1_sig3_px_1024x1536': 165,
+    'safe_band_h_sig2_px_1024x1536': 205,
+    'safe_band_widen_px_1024x1536': 60,
+    'fallback_signature_y_frac': 0.825,
+    'sig1_main_zone_max_y_frac': 0.72,
+    'sig1_top_label_max_y_frac': 0.18,
+    'sig1_top_label_left_x_frac': 0.20,
+    'enable_rescue_mask': True,
+    'min_final_ink_pixels': 35,
+    'min_retained_ratio_from_raw': 0.18,
 }
 CANVAS_W = 640
 CANVAS_H = 360
@@ -748,7 +754,11 @@ def detect_lower_remarks_line_y(tor_img: np.ndarray) -> Optional[int]:
             x, y, w, h, area = stats[i]
             if y < img_h * 0.55 or y > img_h * 0.92 or w < img_w * width_frac:
                 continue
-            if x < img_w * 0.22 or w > img_w * 0.65:
+
+            starts_left = x < img_w * 0.22
+            page_wide = w > img_w * 0.65
+
+            if starts_left or page_wide:
                 local.append((int(y), int(area)))
 
         if local:
@@ -789,7 +799,7 @@ def find_signature_bboxes(tor_img: np.ndarray) -> tuple[dict, Optional[int]]:
 
         if slot == 'sig2_checked_by':
             h = int(round(SIGNATURE_CONFIG['safe_band_h_sig2_px_1024x1536'] * sy))
-            y = base_y - int(round(8 * sy))
+            y = base_y - int(round(12 * sy))
         else:
             h = int(round(SIGNATURE_CONFIG['safe_band_h_sig1_sig3_px_1024x1536'] * sy))
             y = base_y
@@ -801,6 +811,9 @@ def find_signature_bboxes(tor_img: np.ndarray) -> tuple[dict, Optional[int]]:
 
 
 def crop_signature_band(raw_crop: np.ndarray, slot: str) -> np.ndarray:
+    if raw_crop is None or raw_crop.size == 0:
+        return raw_crop
+
     top_frac, bottom_frac = SIGNATURE_BAND_FRAC.get(slot, (0.0, 1.0))
     h = raw_crop.shape[0]
     y1 = max(0, min(int(round(h * top_frac)), h - 1))
@@ -809,13 +822,17 @@ def crop_signature_band(raw_crop: np.ndarray, slot: str) -> np.ndarray:
 
 
 def extract_signature_focused_mask(band_crop_bgr: np.ndarray, slot: str) -> np.ndarray:
+    if band_crop_bgr is None or band_crop_bgr.size == 0:
+        return np.zeros((1, 1), dtype=np.uint8)
+
     gray = cv2.cvtColor(band_crop_bgr, cv2.COLOR_BGR2GRAY) if len(band_crop_bgr.shape) == 3 else band_crop_bgr.copy()
     height, width = gray.shape[:2]
     denoised = cv2.fastNlMeansDenoising(gray, None, 5, 7, 21)
     bg = cv2.GaussianBlur(denoised, (0, 0), sigmaX=max(9, width / 32), sigmaY=max(7, height / 10))
     flat = cv2.divide(denoised, bg, scale=185)
     flat = np.clip(flat, 0, 255).astype(np.uint8)
-    enhanced = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8)).apply(cv2.GaussianBlur(flat, (3, 3), 0))
+    flat = cv2.GaussianBlur(flat, (3, 3), 0)
+    enhanced = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8)).apply(flat)
     adaptive = cv2.adaptiveThreshold(
         enhanced,
         255,
@@ -825,20 +842,55 @@ def extract_signature_focused_mask(band_crop_bgr: np.ndarray, slot: str) -> np.n
         9 if slot == 'sig2_checked_by' else 11,
     )
     otsu_thr, otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    cap = 142 if slot == 'sig2_checked_by' else 136
-    dark_thr = int(np.clip(min(otsu_thr - 4, cap), 75, cap))
+    cap = 146 if slot == 'sig2_checked_by' else 142
+    dark_thr = int(np.clip(min(otsu_thr - 2, cap), 75, cap))
     dark_gate = (enhanced < dark_thr).astype(np.uint8) * 255
-    ink = cv2.bitwise_and(cv2.bitwise_or(adaptive, otsu), dark_gate)
+
+    local_bg = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=max(5, width / 55), sigmaY=max(5, height / 18))
+    diff = cv2.subtract(local_bg, enhanced)
+    diff = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX)
+    contrast = ((diff > 20) & (enhanced < min(cap + 20, 164))).astype(np.uint8) * 255
+
+    ink = cv2.bitwise_or(adaptive, otsu)
+    ink = cv2.bitwise_or(ink, contrast)
+    ink = cv2.bitwise_and(ink, dark_gate)
     ink = cv2.medianBlur(ink, 3)
-    ink = remove_long_horizontal_lines(ink)
-    ink = remove_tiny_components(ink, min_area=max(3, int(height * width * 0.000035)))
-    ink = keep_signature_like_components(ink, slot)
-    ink = remove_long_horizontal_lines(ink)
-    ink = remove_tiny_components(ink, min_area=3)
-    return cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8), iterations=1)
+
+    no_lines = remove_long_horizontal_lines(ink)
+    no_lines = remove_document_rules_only(no_lines)
+    no_tiny = remove_tiny_components(no_lines, min_area=max(3, int(height * width * 0.000025)))
+
+    component_mask = keep_signature_like_components(no_tiny, slot)
+    near_dist = 15 if slot == 'sig2_checked_by' else 17
+    final = add_nearby_small_ink(no_tiny, component_mask, max_dist=near_dist)
+
+    if slot == 'sig2_checked_by':
+        tail_x = find_sig2_tail_x(no_tiny)
+        half_w = int(width * 0.075)
+        tail_zone = np.zeros_like(no_tiny)
+        tail_zone[:, max(0, tail_x - half_w):min(width, tail_x + half_w)] = 255
+        tail_candidate = cv2.bitwise_and(no_tiny, tail_zone)
+        final = cv2.bitwise_or(final, keep_vertical_tail_components(tail_candidate))
+
+    if slot == 'sig1_prepared_by':
+        final = cv2.bitwise_or(final, extract_sig1_with_seed_growth(no_tiny))
+
+    final = remove_long_horizontal_lines(final)
+    final = remove_tiny_components(final, min_area=3)
+    final = cv2.morphologyEx(
+        final,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)),
+        iterations=1,
+    )
+    final, _rescue_used, _rescue_reason = rescue_signature_mask(no_tiny, final, slot)
+    return final
 
 
 def remove_tiny_components(mask: np.ndarray, min_area=5) -> np.ndarray:
+    if mask is None or mask.size == 0:
+        return mask
+
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
     output = np.zeros_like(mask)
     for i in range(1, num_labels):
@@ -848,11 +900,23 @@ def remove_tiny_components(mask: np.ndarray, min_area=5) -> np.ndarray:
 
 
 def remove_long_horizontal_lines(mask: np.ndarray) -> np.ndarray:
+    if mask is None or mask.size == 0:
+        return mask
+
     height, width = mask.shape[:2]
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(30, int(width * 0.32)), 1))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(30, int(width * 0.35)), 1))
     lines = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    output = cv2.bitwise_and(mask, cv2.bitwise_not(lines))
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(output, 8)
+    return cv2.bitwise_and(mask, cv2.bitwise_not(lines))
+
+
+def remove_document_rules_only(mask: np.ndarray) -> np.ndarray:
+    if mask is None or mask.size == 0:
+        return mask
+
+    height, width = mask.shape[:2]
+    output = mask.copy()
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+
     for i in range(1, num_labels):
         x, y, w, h, area = stats[i]
         fill = area / max(w * h, 1)
@@ -860,9 +924,10 @@ def remove_long_horizontal_lines(mask: np.ndarray) -> np.ndarray:
         if (
             w > width * 0.82 and h <= max(4, height * 0.035) and fill > 0.25
         ) or (
-            w > width * 0.65 and h <= max(3, height * 0.025) and (cy < height * 0.12 or cy > height * 0.88)
+            w > width * 0.65 and h <= max(3, height * 0.025) and (cy < height * 0.10 or cy > height * 0.92)
         ):
             output[labels == i] = 0
+
     return output
 
 
@@ -879,44 +944,321 @@ def keep_signature_like_components(ink: np.ndarray, slot: str) -> np.ndarray:
 
         cx, cy = centroids[i]
         fill = area / max(w * h, 1)
+        aspect = w / max(h, 1)
         rel_area = area / max(height * width, 1)
-        y_limit = 0.55 if slot == 'sig2_checked_by' else 0.50
+        wr = w / max(width, 1)
+        hr = h / max(height, 1)
+        y_limit = 0.92 if slot == 'sig2_checked_by' else 0.84
 
         if cy > height * y_limit:
             continue
-        if h < height * 0.20 and w < width * 0.16 and fill > 0.28 and area < height * width * 0.012:
-            continue
-        if w / max(h, 1) > 2.8 and h < height * 0.23 and fill > 0.18 and cy > height * 0.18:
-            continue
 
-        keep = (
-            h >= height * 0.20
-            or w >= width * 0.16
-            or (w >= width * 0.08 and fill < 0.22)
-            or (slot == 'sig2_checked_by' and h >= height * 0.32 and w <= width * 0.20)
-            or (rel_area >= 0.0012 and fill < 0.45)
+        compact_print = (
+            h < height * 0.18
+            and w < width * 0.14
+            and fill > 0.34
+            and rel_area < 0.014
         )
+        if compact_print:
+            continue
 
-        if keep:
-            score = area + (1.8 * w) + (2.2 * h) - (70.0 * fill)
-            components.append((score, i, x, y, w, h, area))
+        dense_text_word = (
+            aspect > 2.4
+            and h < height * 0.18
+            and fill > 0.22
+            and rel_area < 0.025
+            and cy > height * 0.18
+        )
+        if dense_text_word:
+            continue
+
+        long_sweep = wr >= 0.16 and fill < 0.62
+        tall_tail = hr >= 0.18 and fill < 0.72
+        sparse_component = fill < 0.35 and (wr >= 0.05 or hr >= 0.10)
+        large_thin_component = rel_area >= 0.0010 and fill < 0.50
+        vertical_tail = slot == 'sig2_checked_by' and h >= height * 0.26 and w <= width * 0.24
+
+        if long_sweep or tall_tail or sparse_component or large_thin_component or vertical_tail:
+            score = area + (2.2 * w) + (2.4 * h) - (45.0 * fill)
+            if cy < height * 0.60:
+                score += 35
+            components.append((score, i, x, y, w, h, area, fill, cx, cy))
 
     if not components:
         return output
 
     components.sort(reverse=True, key=lambda item: item[0])
     best_score = components[0][0]
-    kept = [component for component in components if component[0] >= best_score * 0.38]
+    kept = []
 
-    largest = max(kept, key=lambda item: item[6])
-    _score, _i, lx, ly, lw, lh, _area = largest
-    x1 = max(0, lx - int(width * 0.22))
-    x2 = min(width, lx + lw + int(width * 0.22))
-    y1 = max(0, ly - int(height * 0.25))
-    y2 = height if slot == 'sig2_checked_by' else min(height, ly + lh + int(height * 0.30))
+    for score, i, x, y, w, h, area, fill, cx, cy in components:
+        keep = False
 
-    for _score, i, x, y, w, h, _area in kept:
-        if x <= x2 and x + w >= x1 and y <= y2 and y + h >= y1:
+        if score >= best_score * 0.30:
+            keep = True
+        if h >= height * 0.22:
+            keep = True
+        if w >= width * 0.20 and fill < 0.60:
+            keep = True
+        if slot == 'sig3_certified_by' and (h >= height * 0.18 or w >= width * 0.16):
+            keep = True
+        if slot == 'sig1_prepared_by' and ((w >= width * 0.14 and fill < 0.55) or h >= height * 0.20):
+            keep = True
+
+        if keep:
+            kept.append((i, x, y, w, h, area, fill, cx, cy))
+            output[labels == i] = 255
+
+    if kept:
+        largest = max(kept, key=lambda item: item[5])
+        _i, lx, ly, lw, lh, _area, _fill, _cx, _cy = largest
+
+        x1 = max(0, lx - int(width * 0.36))
+        x2 = min(width, lx + lw + int(width * 0.36))
+        y1 = max(0, ly - int(height * 0.35))
+        y2 = min(height, ly + lh + int(height * 0.42))
+
+        if slot == 'sig2_checked_by':
+            y2 = height
+
+        clustered = np.zeros_like(output)
+
+        for i, x, y, w, h, _area, fill, _cx, _cy in kept:
+            near = x <= x2 and x + w >= x1 and y <= y2 and y + h >= y1
+            obvious_tail = slot == 'sig2_checked_by' and h >= height * 0.24
+            obvious_sweep = w >= width * 0.24 and fill < 0.60
+
+            if near or obvious_tail or obvious_sweep:
+                clustered[labels == i] = 255
+
+        output = clustered
+
+    return output
+
+
+def add_nearby_small_ink(candidate: np.ndarray, base: np.ndarray, max_dist=15) -> np.ndarray:
+    if candidate is None or base is None:
+        return base
+    if np.count_nonzero(base) == 0:
+        return base
+
+    kernel_size = max(3, int(max_dist))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+
+    dil_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    near_region = cv2.dilate(base, dil_kernel, iterations=1)
+    output = base.copy()
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(candidate, 8)
+
+    for i in range(1, num_labels):
+        x, y, w, h, area = stats[i]
+        if area < 2 or area > candidate.size * 0.05:
+            continue
+
+        component = (labels == i).astype(np.uint8) * 255
+        overlap = cv2.bitwise_and(component, near_region)
+
+        if np.count_nonzero(overlap) > 0:
             output[labels == i] = 255
 
     return output
+
+
+def find_sig2_tail_x(mask: np.ndarray) -> int:
+    height, width = mask.shape[:2]
+    search_x1 = int(width * 0.05)
+    search_x2 = int(width * 0.65)
+    search = mask[:, search_x1:search_x2]
+    kernel_h = max(12, int(height * 0.16))
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_h))
+    vertical = cv2.morphologyEx(search, cv2.MORPH_OPEN, vertical_kernel, iterations=1)
+    col_scores = vertical.sum(axis=0).astype(np.float32)
+
+    if col_scores.max() <= 0:
+        col_scores = search.sum(axis=0).astype(np.float32)
+    if col_scores.max() <= 0:
+        return int(width * 0.25)
+
+    return search_x1 + int(np.argmax(col_scores))
+
+
+def keep_vertical_tail_components(mask: np.ndarray) -> np.ndarray:
+    height, width = mask.shape[:2]
+    output = np.zeros_like(mask)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+
+    for i in range(1, num_labels):
+        x, y, w, h, area = stats[i]
+        if area < 4:
+            continue
+
+        fill = area / max(w * h, 1)
+        tall = h > height * 0.12
+        narrow_or_sparse = w < width * 0.25 or fill < 0.70
+
+        if tall and narrow_or_sparse:
+            output[labels == i] = 255
+
+    return output
+
+
+def extract_sig1_with_seed_growth(ink: np.ndarray) -> np.ndarray:
+    height, width = ink.shape[:2]
+    zone_y = int(height * float(SIGNATURE_CONFIG['sig1_main_zone_max_y_frac']))
+    candidate = np.zeros_like(ink)
+    candidate[:zone_y, :] = ink[:zone_y, :]
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(candidate, 8)
+    components = []
+
+    for i in range(1, num_labels):
+        x, y, w, h, area = stats[i]
+        if area < 4:
+            continue
+
+        fill = area / max(w * h, 1)
+        cx = x + w / 2
+        cy = y + h / 2
+
+        if (
+            cy < height * float(SIGNATURE_CONFIG['sig1_top_label_max_y_frac'])
+            and cx < width * float(SIGNATURE_CONFIG['sig1_top_label_left_x_frac'])
+        ):
+            continue
+
+        sparse = fill < 0.88
+        elongated = w > width * 0.04 or h > height * 0.08
+
+        if sparse and elongated:
+            score = (
+                (w * 2.8)
+                + (h * 1.5)
+                + (area * 0.10)
+                - (abs(cy - height * 0.38) * 0.35)
+                - (fill * 20.0)
+            )
+            components.append({
+                'idx': i,
+                'x': x,
+                'y': y,
+                'w': w,
+                'h': h,
+                'area': area,
+                'fill': fill,
+                'cx': cx,
+                'cy': cy,
+                'score': score,
+            })
+
+    if not components:
+        return np.zeros_like(ink)
+
+    components = sorted(components, key=lambda component: component['score'], reverse=True)
+    seed = components[0]
+    output = np.zeros_like(candidate)
+    output[labels == seed['idx']] = 255
+    seed_x1 = seed['x'] - int(width * 0.26)
+    seed_x2 = seed['x'] + seed['w'] + int(width * 0.24)
+    seed_y1 = seed['y'] - int(height * 0.28)
+    seed_y2 = seed['y'] + seed['h'] + int(height * 0.34)
+
+    for component in components[1:]:
+        close_x = seed_x1 <= component['cx'] <= seed_x2
+        close_y = seed_y1 <= component['cy'] <= seed_y2
+        left_sweep = (
+            component['cx'] < seed['cx']
+            and abs(component['cy'] - seed['cy']) < height * 0.25
+            and component['w'] > width * 0.05
+        )
+        lower_loop = component['cy'] > seed['cy'] and component['cy'] < height * 0.70 and component['h'] > height * 0.10
+
+        if (close_x and close_y) or left_sweep or lower_loop:
+            blocky = component['fill'] > 0.78 and component['h'] < height * 0.12 and component['w'] < width * 0.14
+            if not blocky:
+                output[labels == component['idx']] = 255
+
+    output = add_nearby_small_ink(candidate, output, max_dist=15)
+    pruned = np.zeros_like(output)
+    num_labels2, labels2, stats2, _ = cv2.connectedComponentsWithStats(output, 8)
+
+    for j in range(1, num_labels2):
+        x, y, w, h, area = stats2[j]
+        if area < 3:
+            continue
+
+        fill = area / max(w * h, 1)
+        cy = y + h / 2
+
+        if cy < height * 0.78 and fill < 0.88:
+            pruned[labels2 == j] = 255
+
+    return cv2.morphologyEx(
+        pruned,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)),
+        iterations=1,
+    )
+
+
+def rescue_signature_mask(no_tiny: np.ndarray, current_final: np.ndarray, slot: str) -> tuple[np.ndarray, bool, str]:
+    if no_tiny is None or no_tiny.size == 0:
+        return current_final, False, 'empty no_tiny'
+
+    raw_pixels = int(np.count_nonzero(no_tiny))
+    final_pixels = int(np.count_nonzero(current_final)) if current_final is not None else 0
+
+    if raw_pixels <= 0:
+        return current_final, False, 'no raw ink'
+
+    retained_ratio = final_pixels / max(raw_pixels, 1)
+    needs_rescue = (
+        final_pixels < int(SIGNATURE_CONFIG['min_final_ink_pixels'])
+        or retained_ratio < float(SIGNATURE_CONFIG['min_retained_ratio_from_raw'])
+    )
+
+    if not SIGNATURE_CONFIG.get('enable_rescue_mask', True) or not needs_rescue:
+        return current_final, False, f'no rescue needed; retained_ratio={retained_ratio:.3f}'
+
+    height, width = no_tiny.shape[:2]
+    rescue = np.zeros_like(no_tiny)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(no_tiny, 8)
+
+    for i in range(1, num_labels):
+        x, y, w, h, area = stats[i]
+        if area < 3:
+            continue
+
+        fill = area / max(w * h, 1)
+        wr = w / max(width, 1)
+        hr = h / max(height, 1)
+        cy = y + h / 2
+        keep = (
+            (wr >= 0.10 and fill < 0.75)
+            or (hr >= 0.12 and fill < 0.80)
+            or (area >= height * width * 0.0012 and fill < 0.60)
+        )
+
+        if cy > height * 0.92 and fill > 0.35:
+            keep = False
+
+        if keep:
+            rescue[labels == i] = 255
+
+    rescue = remove_long_horizontal_lines(rescue)
+    rescue = remove_tiny_components(rescue, min_area=3)
+
+    if current_final is not None:
+        rescue = cv2.bitwise_or(rescue, current_final)
+
+    rescue = cv2.morphologyEx(
+        rescue,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)),
+        iterations=1,
+    )
+
+    rescue_pixels = int(np.count_nonzero(rescue))
+    if rescue_pixels > final_pixels:
+        return rescue, True, f'rescued; final={final_pixels}, rescue={rescue_pixels}, raw={raw_pixels}, retained_ratio={retained_ratio:.3f}'
+
+    return current_final, False, f'rescue not better; final={final_pixels}, rescue={rescue_pixels}, raw={raw_pixels}'
