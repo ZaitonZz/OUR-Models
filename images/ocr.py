@@ -17,6 +17,10 @@ DEGREE_VALUE_STOP_PATTERN = re.compile(
     r'\s+(?:semester admitted|student no|student number|date graduated|date of graduation|school year|year level)\b.*$',
     re.IGNORECASE,
 )
+SEMESTER_VALUE_PREFIX_PATTERN = re.compile(
+    r'^.*?\b\d(?:st|nd|rd|th)\s+semester\s*,?\s*sy\s+\d{4}\s*[-–]\s*\d{4}\s+',
+    re.IGNORECASE,
+)
 DEGREE_REGION_CROPS = (
     (0.10, 0.20, 0.35, 0.98),
     (0.10, 0.28, 0.35, 0.98),
@@ -135,6 +139,8 @@ def normalize_ocr_line(line: str) -> str:
 
 
 def clean_degree_value(value: str) -> str:
+    value = SEMESTER_VALUE_PREFIX_PATTERN.sub('', value)
+
     degree_match = DEGREE_VALUE_PATTERN.search(value)
     if degree_match:
         value = degree_match.group(0)

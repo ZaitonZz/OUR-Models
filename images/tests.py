@@ -632,12 +632,31 @@ class OcrExtractionTests(TestCase):
             'Bachelor of Science in Information Technology',
         )
 
+    def test_degree_extraction_reads_master_degree_next_to_semester_admitted(self):
+        text = """
+        Semester Admitted Degree Title/Course
+        1ST SEMESTER, SY 2013-2014 MASTER OF SCIENCE IN BIOLOGY (MSBio)
+        """
+
+        self.assertEqual(
+            extract_degree_from_text(text),
+            'MASTER OF SCIENCE IN BIOLOGY (MSBio)',
+        )
+
     def test_degree_extraction_falls_back_to_degree_phrase_when_label_is_missed(self):
         text = '1ST SEMESTER, SY 2022-2023 Bachelor of Science in Information Technology'
 
         self.assertEqual(
             extract_degree_from_text(text),
             'Bachelor of Science in Information Technology',
+        )
+
+    def test_degree_extraction_reads_master_degree_when_label_is_missed(self):
+        text = '1ST SEMESTER, SY 2013-2014 MASTER OF SCIENCE IN BIOLOGY (MSBio)'
+
+        self.assertEqual(
+            extract_degree_from_text(text),
+            'MASTER OF SCIENCE IN BIOLOGY (MSBio)',
         )
 
     def test_degree_extraction_tries_multiple_image_regions(self):
