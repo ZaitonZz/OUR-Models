@@ -139,13 +139,26 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(job.result['model_label'], 'EfficientNet-B0 top-k aggregation')
         self.assertEqual(job.result['model_threshold'], 0.8)
         self.assertEqual(job.result['threshold'], 0.8)
-        self.assertEqual(job.result['aggregation'], 'topk_mean')
         self.assertEqual(job.result['top_roi_score'], 0.933)
         self.assertEqual(job.result['roi_scores']['footer']['top5_mean'], 0.933)
         self.assertEqual(payload['model_key'], 'efficientnet_b0_topk')
         self.assertEqual(payload['model_label'], 'EfficientNet-B0 top-k aggregation')
         self.assertEqual(payload['model_threshold'], 0.8)
         mock_get_detector.assert_called_once_with('efficientnet_b0_topk')
+
+    def test_topk_aggregation_scores_whole_document_and_roi_explanations(self):
+        from .inference_efficientnet_topk import _aggregate
+
+        result = _aggregate(
+            patch_probs=[0.80, 0.30, 0.20, 0.95, 0.90, 0.85, 0.40, 0.70, 0.25],
+            patch_rois=['header', 'header', 'header', 'body', 'body', 'body', 'body', 'footer', 'footer'],
+            top_k=5,
+        )
+
+        self.assertAlmostEqual(result['doc_score'], 0.84, places=2)
+        self.assertEqual(result['top_roi'], 'body')
+        self.assertAlmostEqual(result['top_roi_score'], 0.775, places=3)
+        self.assertEqual(set(result['roi_scores']['body'].keys()), {'n_patches', 'top5_mean'})
 
     @patch('images.services.requests.post')
     @patch('images.services.extract_degree_from_path')
@@ -173,8 +186,8 @@ class ImageUploadApiTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(ImageJob.objects.get().callback_url, '')
-        self.assertEqual(ImageJob.objects.get().model_key, 'efficientnet_b0')
-        self.assertEqual(response.json()['model_key'], 'efficientnet_b0')
+        self.assertEqual(ImageJob.objects.get().model_key, 'efficientnet_b0_topk')
+        self.assertEqual(response.json()['model_key'], 'efficientnet_b0_topk')
         mock_post.assert_not_called()
 
     def test_upload_api_rejects_duplicate_external_id(self):
@@ -230,7 +243,7 @@ class ImageUploadApiTests(TestCase):
                 'image': upload,
                 'external_id': 'website-1',
                 'callback_url': 'https://example.com/api/results',
-                'model_key': 'resnet50_mean',
+                'model_key': 'efficientnet_b0_topk',
                 'expected_signatures': json.dumps(self.expected_signatures()),
             },
             HTTP_X_TOR_SERVICE_TOKEN='test-token',
@@ -240,7 +253,7 @@ class ImageUploadApiTests(TestCase):
         payload = response.json()
         job = ImageJob.objects.get(pk=payload['id'])
         self.assertEqual(job.external_id, 'website-1')
-        self.assertEqual(job.model_key, 'resnet50_mean')
+        self.assertEqual(job.model_key, 'efficientnet_b0_topk')
         self.assertEqual(job.status, ImageJob.Status.COMPLETE)
         self.assertTrue(job.preprocessed_image.name)
         self.assertEqual(job.preprocessing['method'], 'brightness')
@@ -248,8 +261,8 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(job.preprocessing['patch_counts']['body'], 2)
         self.assertEqual(job.result['label'], 'genuine')
         self.assertEqual(job.result['score'], 0.1234)
-        self.assertEqual(job.result['model_key'], 'resnet50_mean')
-        self.assertEqual(job.result['model_label'], 'ResNet50 mean aggregation')
+        self.assertEqual(job.result['model_key'], 'efficientnet_b0_topk')
+        self.assertEqual(job.result['model_label'], 'EfficientNet-B0 top-k aggregation')
         self.assertTrue(job.result['signature_verification']['success'])
         self.assertEqual(
             job.result['degree_extraction']['degree'],
@@ -260,10 +273,10 @@ class ImageUploadApiTests(TestCase):
             'Judito T. Abadia',
         )
         self.assertIn('/media/preprocessed/', payload['preprocessed_image_url'])
-        self.assertEqual(payload['model_key'], 'resnet50_mean')
-        self.assertEqual(payload['model_label'], 'ResNet50 mean aggregation')
-        self.assertEqual(payload['model_threshold'], 0.34)
-        mock_get_detector.assert_called_once_with('resnet50_mean')
+        self.assertEqual(payload['model_key'], 'efficientnet_b0_topk')
+        self.assertEqual(payload['model_label'], 'EfficientNet-B0 top-k aggregation')
+        self.assertEqual(payload['model_threshold'], 0.8)
+        mock_get_detector.assert_called_once_with('efficientnet_b0_topk')
         mock_get_detector.return_value.predict.assert_called_once()
         mock_verify_signatures.assert_called_once()
         mock_extract_degree.assert_called_once_with(job.image.path)
@@ -280,8 +293,8 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(callback_payload['external_id'], 'website-1')
         self.assertEqual(callback_payload['job_id'], payload['id'])
         self.assertEqual(callback_payload['status'], ImageJob.Status.COMPLETE)
-        self.assertEqual(callback_payload['model_key'], 'resnet50_mean')
-        self.assertEqual(callback_payload['model_label'], 'ResNet50 mean aggregation')
+        self.assertEqual(callback_payload['model_key'], 'efficientnet_b0_topk')
+        self.assertEqual(callback_payload['model_label'], 'EfficientNet-B0 top-k aggregation')
         self.assertIn('/media/preprocessed/', callback_payload['preprocessed_image_url'])
         self.assertEqual(callback_payload['method'], 'brightness')
         self.assertEqual(callback_payload['patch_counts']['body'], 2)
@@ -386,8 +399,8 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['external_id'], 'website-1')
-        self.assertEqual(payload['model_key'], 'efficientnet_b0')
-        self.assertEqual(payload['model_label'], 'EfficientNet-B0 baseline')
+        self.assertEqual(payload['model_key'], 'efficientnet_b0_topk')
+        self.assertEqual(payload['model_label'], 'EfficientNet-B0 top-k aggregation')
         self.assertEqual(payload['preprocessing']['method'], 'brightness')
         self.assertEqual(payload['result']['label'], 'genuine')
 
@@ -426,8 +439,14 @@ class ImageUploadApiTests(TestCase):
             success=True,
             label='genuine',
             score=0.1234,
-            roi_scores={'header': 0.1, 'body': 0.12, 'footer': 0.15},
+            roi_scores={
+                'header': {'n_patches': 1, 'top5_mean': 0.1},
+                'body': {'n_patches': 2, 'top5_mean': 0.12},
+                'footer': {'n_patches': 3, 'top5_mean': 0.15},
+            },
             top_roi='footer',
+            top_roi_score=0.15,
+            threshold=0.8,
             error=None,
         )
 
@@ -438,13 +457,12 @@ class ImageUploadApiTests(TestCase):
             label='fake',
             score=0.933,
             roi_scores={
-                'header': {'n_patches': 1, 'mean': 0.2, 'max': 0.2, 'top5_mean': 0.2},
-                'body': {'n_patches': 2, 'mean': 0.4, 'max': 0.45, 'top5_mean': 0.4},
-                'footer': {'n_patches': 3, 'mean': 0.8, 'max': 0.98, 'top5_mean': 0.933},
+                'header': {'n_patches': 1, 'top5_mean': 0.2},
+                'body': {'n_patches': 2, 'top5_mean': 0.4},
+                'footer': {'n_patches': 3, 'top5_mean': 0.933},
             },
             top_roi='footer',
             top_roi_score=0.933,
-            aggregation='topk_mean',
             threshold=0.8,
             error=None,
         )

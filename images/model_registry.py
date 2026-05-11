@@ -4,14 +4,10 @@ from pathlib import Path
 
 from django.conf import settings
 
-from .inference import TORInference as EfficientNetInference
 from .inference_efficientnet_topk import TORInference as EfficientNetTopKInference
-from .inference_resnet50_mean import TORInference as ResNet50MeanInference
 
 
-DEFAULT_MODEL_KEY = 'efficientnet_b0'
-EFFICIENTNET_TOPK_MODEL_KEY = 'efficientnet_b0_topk'
-RESNET50_MEAN_MODEL_KEY = 'resnet50_mean'
+DEFAULT_MODEL_KEY = 'efficientnet_b0_topk'
 
 
 @dataclass(frozen=True)
@@ -29,31 +25,14 @@ def model_options() -> dict[str, DetectorConfig]:
     return {
         DEFAULT_MODEL_KEY: DetectorConfig(
             key=DEFAULT_MODEL_KEY,
-            label='EfficientNet-B0 baseline',
-            inference_class=EfficientNetInference,
-            weights_path=settings.TOR_MODEL_WEIGHTS_PATH,
-            threshold=settings.TOR_INFERENCE_THRESHOLD,
-            device=settings.TOR_INFERENCE_DEVICE,
-        ),
-        EFFICIENTNET_TOPK_MODEL_KEY: DetectorConfig(
-            key=EFFICIENTNET_TOPK_MODEL_KEY,
             label='EfficientNet-B0 top-k aggregation',
             inference_class=EfficientNetTopKInference,
             weights_path=settings.TOR_EFFICIENTNET_TOPK_MODEL_WEIGHTS_PATH,
             threshold=settings.TOR_EFFICIENTNET_TOPK_INFERENCE_THRESHOLD,
             device=settings.TOR_EFFICIENTNET_TOPK_INFERENCE_DEVICE,
             inference_kwargs={
-                'aggregation': settings.TOR_EFFICIENTNET_TOPK_AGGREGATION,
                 'top_k': settings.TOR_EFFICIENTNET_TOPK_TOP_K,
             },
-        ),
-        RESNET50_MEAN_MODEL_KEY: DetectorConfig(
-            key=RESNET50_MEAN_MODEL_KEY,
-            label='ResNet50 mean aggregation',
-            inference_class=ResNet50MeanInference,
-            weights_path=settings.TOR_RESNET50_MODEL_WEIGHTS_PATH,
-            threshold=settings.TOR_RESNET50_INFERENCE_THRESHOLD,
-            device=settings.TOR_RESNET50_INFERENCE_DEVICE,
         ),
     }
 

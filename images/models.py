@@ -3,9 +3,7 @@ from django.db import models
 
 class ImageJob(models.Model):
     class ModelKey(models.TextChoices):
-        EFFICIENTNET_B0 = 'efficientnet_b0', 'EfficientNet-B0 baseline'
         EFFICIENTNET_B0_TOPK = 'efficientnet_b0_topk', 'EfficientNet-B0 top-k aggregation'
-        RESNET50_MEAN = 'resnet50_mean', 'ResNet50 mean aggregation'
 
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
@@ -18,7 +16,7 @@ class ImageJob(models.Model):
     model_key = models.CharField(
         max_length=64,
         choices=ModelKey.choices,
-        default=ModelKey.EFFICIENTNET_B0,
+        default=ModelKey.EFFICIENTNET_B0_TOPK,
     )
     image = models.ImageField(upload_to='uploads/%Y/%m/%d/')
     preprocessed_image = models.ImageField(upload_to='preprocessed/%Y/%m/%d/', blank=True)

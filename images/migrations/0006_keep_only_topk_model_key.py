@@ -3,7 +3,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ('images', '0004_imagejob_model_key'),
+        ('images', '0005_imagejob_model_key_choices'),
     ]
 
     operations = [

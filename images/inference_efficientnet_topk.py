@@ -17,7 +17,6 @@ IMG_SIZE = 224
 BATCH_SIZE = 32
 DEFAULT_THRESHOLD = 0.800
 DEFAULT_TOP_K = 5
-DEFAULT_AGGREGATION = 'topk_mean'
 
 
 @dataclass
@@ -28,7 +27,6 @@ class InferenceResult:
     roi_scores: Optional[dict]
     top_roi: Optional[str]
     top_roi_score: Optional[float]
-    aggregation: Optional[str]
     threshold: Optional[float]
     error: Optional[str] = None
 
@@ -92,7 +90,6 @@ def _mean_top_k(values: list[float], top_k: int) -> float:
 def _aggregate(
     patch_probs: list[float],
     patch_rois: list[str],
-    aggregation: str = DEFAULT_AGGREGATION,
     top_k: int = DEFAULT_TOP_K,
 ) -> dict[str, Any]:
     if len(patch_probs) == 0:
@@ -114,31 +111,7 @@ def _aggregate(
 
         roi_probs[roi].append(float(probability))
 
-    if aggregation == 'mean':
-        doc_score = float(np.mean(all_scores))
-    elif aggregation == 'max':
-        doc_score = float(np.max(all_scores))
-    elif aggregation == 'topk_mean':
-        doc_score = _mean_top_k(all_scores, top_k)
-    elif aggregation == 'roi_max':
-        roi_max_scores = [
-            float(np.max(roi_probs[roi]))
-            for roi in ROIS
-            if roi_probs[roi]
-        ]
-        doc_score = float(max(roi_max_scores)) if roi_max_scores else 0.0
-    elif aggregation == 'roi_topk_mean':
-        roi_topk_scores = [
-            _mean_top_k(roi_probs[roi], top_k)
-            for roi in ROIS
-            if roi_probs[roi]
-        ]
-        doc_score = float(max(roi_topk_scores)) if roi_topk_scores else 0.0
-    else:
-        raise ValueError(
-            f'Unknown aggregation: {aggregation}. '
-            'Use mean, max, topk_mean, roi_max, or roi_topk_mean.'
-        )
+    doc_score = _mean_top_k(all_scores, top_k)
 
     roi_scores = {}
 
@@ -148,16 +121,12 @@ def _aggregate(
         if not scores:
             roi_scores[roi] = {
                 'n_patches': 0,
-                'mean': 0.0,
-                'max': 0.0,
                 f'top{top_k}_mean': 0.0,
             }
             continue
 
         roi_scores[roi] = {
             'n_patches': int(len(scores)),
-            'mean': float(np.mean(scores)),
-            'max': float(np.max(scores)),
             f'top{top_k}_mean': _mean_top_k(scores, top_k),
         }
 
@@ -177,13 +146,11 @@ class TORInference:
         self,
         weights_path: str,
         threshold: float = DEFAULT_THRESHOLD,
-        aggregation: str = DEFAULT_AGGREGATION,
         top_k: int = DEFAULT_TOP_K,
         device: Optional[str] = None,
     ):
         self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
         self.threshold = float(threshold)
-        self.aggregation = aggregation
         self.top_k = int(top_k)
         self.model = _build_model(self.device)
 
@@ -200,7 +167,6 @@ class TORInference:
                 roi_scores=None,
                 top_roi=None,
                 top_roi_score=None,
-                aggregation=self.aggregation,
                 threshold=self.threshold,
                 error='Empty patch list.',
             )
@@ -210,7 +176,6 @@ class TORInference:
             aggregate = _aggregate(
                 patch_probs=patch_probs,
                 patch_rois=patch_rois,
-                aggregation=self.aggregation,
                 top_k=self.top_k,
             )
 
@@ -231,7 +196,6 @@ class TORInference:
                 roi_scores=rounded_roi_scores,
                 top_roi=aggregate['top_roi'],
                 top_roi_score=round(float(aggregate['top_roi_score']), 4),
-                aggregation=self.aggregation,
                 threshold=self.threshold,
                 error=None,
             )
@@ -243,7 +207,6 @@ class TORInference:
                 roi_scores=None,
                 top_roi=None,
                 top_roi_score=None,
-                aggregation=self.aggregation,
                 threshold=self.threshold,
                 error=str(exc),
             )

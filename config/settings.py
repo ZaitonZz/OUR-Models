@@ -134,12 +134,6 @@ PREPROCESSING_CALLBACK_TIMEOUT_SECONDS = float(
     os.environ.get('PREPROCESSING_CALLBACK_TIMEOUT_SECONDS', '10')
 )
 TOR_SERVICE_TOKEN = os.environ.get('TOR_SERVICE_TOKEN', 'local-dev-token')
-TOR_MODEL_WEIGHTS_PATH = os.environ.get(
-    'TOR_MODEL_WEIGHTS_PATH',
-    str(BASE_DIR / 'patch_baseline_final.pth'),
-)
-TOR_INFERENCE_THRESHOLD = float(os.environ.get('TOR_INFERENCE_THRESHOLD', '0.380'))
-TOR_INFERENCE_DEVICE = os.environ.get('TOR_INFERENCE_DEVICE', '')
 TOR_EFFICIENTNET_TOPK_MODEL_WEIGHTS_PATH = os.environ.get(
     'TOR_EFFICIENTNET_TOPK_MODEL_WEIGHTS_PATH',
     str(BASE_DIR / 'model1_fulltrain_final.pth'),
@@ -149,22 +143,9 @@ TOR_EFFICIENTNET_TOPK_INFERENCE_THRESHOLD = float(
 )
 TOR_EFFICIENTNET_TOPK_INFERENCE_DEVICE = os.environ.get(
     'TOR_EFFICIENTNET_TOPK_INFERENCE_DEVICE',
-    os.environ.get('TOR_INFERENCE_DEVICE', ''),
-)
-TOR_EFFICIENTNET_TOPK_AGGREGATION = os.environ.get(
-    'TOR_EFFICIENTNET_TOPK_AGGREGATION',
-    'topk_mean',
+    '',
 )
 TOR_EFFICIENTNET_TOPK_TOP_K = int(os.environ.get('TOR_EFFICIENTNET_TOPK_TOP_K', '5'))
-TOR_RESNET50_MODEL_WEIGHTS_PATH = os.environ.get(
-    'TOR_RESNET50_MODEL_WEIGHTS_PATH',
-    str(BASE_DIR / 'patch_baseline_final_resnet50.pth'),
-)
-TOR_RESNET50_INFERENCE_THRESHOLD = float(os.environ.get('TOR_RESNET50_INFERENCE_THRESHOLD', '0.340'))
-TOR_RESNET50_INFERENCE_DEVICE = os.environ.get(
-    'TOR_RESNET50_INFERENCE_DEVICE',
-    os.environ.get('TOR_INFERENCE_DEVICE', ''),
-)
 TOR_SIGNATURE_MODEL_WEIGHTS_PATH = os.environ.get(
     'TOR_SIGNATURE_MODEL_WEIGHTS_PATH',
     str(BASE_DIR / 'siamese_resnet18_finetuned_no_leakage.pth'),

@@ -64,9 +64,9 @@ After preprocessing and inference finish, Django POSTs JSON to `callback_url`:
     "label": "genuine",
     "score": 0.1234,
     "roi_scores": {
-      "header": 0.1,
-      "body": 0.12,
-      "footer": 0.15
+      "header": {"n_patches": 1, "top5_mean": 0.1},
+      "body": {"n_patches": 2, "top5_mean": 0.12},
+      "footer": {"n_patches": 3, "top5_mean": 0.15}
     },
     "top_roi": "footer",
     "error": ""
@@ -83,10 +83,11 @@ GET /api/images/<id>/
 
 ## Model
 
-`patch_baseline_final.pth` is loaded by `images/inference.py` and receives transient patches from `images/preprocessing_pipeline.py`. You can override model settings with:
+`model1_fulltrain_final.pth` is loaded by `images/inference_efficientnet_topk.py` and receives transient patches from `images/preprocessing_pipeline.py`. It scores the whole document by averaging the top 5 patch probabilities across header, body, and footer. You can override model settings with:
 
 ```powershell
-$env:TOR_MODEL_WEIGHTS_PATH = "C:\path\to\patch_baseline_final.pth"
-$env:TOR_INFERENCE_THRESHOLD = "0.380"
-$env:TOR_INFERENCE_DEVICE = "cpu"
+$env:TOR_EFFICIENTNET_TOPK_MODEL_WEIGHTS_PATH = "C:\path\to\model1_fulltrain_final.pth"
+$env:TOR_EFFICIENTNET_TOPK_INFERENCE_THRESHOLD = "0.800"
+$env:TOR_EFFICIENTNET_TOPK_INFERENCE_DEVICE = "cpu"
+$env:TOR_EFFICIENTNET_TOPK_TOP_K = "5"
 ```

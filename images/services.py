@@ -145,7 +145,7 @@ def run_models(patches: list, model_key: str) -> dict:
         'error': inference_result.error or '',
     }
 
-    for attribute in ['top_roi_score', 'aggregation', 'threshold']:
+    for attribute in ['top_roi_score', 'threshold']:
         if hasattr(inference_result, attribute):
             result[attribute] = getattr(inference_result, attribute)
 

@@ -10,6 +10,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='imagejob',
             name='model_key',
-            field=models.CharField(default='efficientnet_b0', max_length=64),
+            field=models.CharField(default='efficientnet_b0_topk', max_length=64),
         ),
     ]
