@@ -9,6 +9,20 @@ DEGREE_LABEL_PATTERN = re.compile(
     r'degree\s*(?:/|\s)+title\s*(?:/|\s)+course\s*:?\s*(?P<inline>.*)$',
     re.IGNORECASE,
 )
+DEGREE_VALUE_PATTERN = re.compile(
+    r'\b(?:Bachelor|Master|Doctor|Associate)\s+(?:of|in)\s+\S.*',
+    re.IGNORECASE,
+)
+DEGREE_VALUE_STOP_PATTERN = re.compile(
+    r'\s+(?:semester admitted|student no|student number|date graduated|date of graduation|school year|year level)\b.*$',
+    re.IGNORECASE,
+)
+DEGREE_REGION_CROPS = (
+    (0.10, 0.20, 0.35, 0.98),
+    (0.10, 0.28, 0.35, 0.98),
+    (0.06, 0.38, 0.35, 0.98),
+    (0.06, 0.38, 0.04, 0.96),
+)
 
 
 def extract_degree_from_path(image_path: str) -> dict[str, Any]:
@@ -29,11 +43,18 @@ def extract_degree_from_image(document_image: np.ndarray) -> dict[str, Any]:
         return unavailable_result('Install pytesseract and the Tesseract OCR binary to enable degree extraction.')
 
     try:
-        text = pytesseract.image_to_string(prepare_degree_region(document_image), config='--psm 6')
+        texts = []
+        degree = ''
+        for region in prepare_degree_regions(document_image):
+            text = pytesseract.image_to_string(region, config='--psm 6')
+            texts.append(text)
+            degree = extract_degree_from_text(text)
+            if degree:
+                break
     except Exception as exc:
         return unavailable_result(f'OCR failed: {exc}')
 
-    degree = extract_degree_from_text(text)
+    raw_text = '\n--- OCR attempt ---\n'.join(texts)
 
     return {
         'success': degree != '',
@@ -42,34 +63,45 @@ def extract_degree_from_image(document_image: np.ndarray) -> dict[str, Any]:
         'course': degree or None,
         'program_match': None,
         'message': 'Degree extracted from TOR OCR.' if degree else 'Degree/Title/Course label was not found by OCR.',
-        'raw_text': text,
+        'raw_text': raw_text,
     }
 
 
 def prepare_degree_region(document_image: np.ndarray) -> np.ndarray:
     """Crop and sharpen the upper TOR area where Degree/Title/Course appears."""
+    return prepare_degree_regions(document_image)[0]
+
+
+def prepare_degree_regions(document_image: np.ndarray) -> list[np.ndarray]:
+    """Return likely Degree/Title/Course OCR regions, from strictest to broadest."""
     if document_image.size == 0:
-        return document_image
+        return [document_image]
 
     height, width = document_image.shape[:2]
-    top = int(height * 0.10)
-    bottom = int(height * 0.20)
-    left = int(width * 0.35)
-    right = int(width * 0.98)
-    region = document_image[top:bottom, left:right]
+    regions = []
 
-    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if region.ndim == 3 else region
-    scaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-    denoised = cv2.fastNlMeansDenoising(scaled, None, 12, 7, 21)
+    for top_ratio, bottom_ratio, left_ratio, right_ratio in DEGREE_REGION_CROPS:
+        top = int(height * top_ratio)
+        bottom = int(height * bottom_ratio)
+        left = int(width * left_ratio)
+        right = int(width * right_ratio)
+        region = document_image[top:bottom, left:right]
 
-    return cv2.adaptiveThreshold(
-        denoised,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31,
-        11,
-    )
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if region.ndim == 3 else region
+        scaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        denoised = cv2.fastNlMeansDenoising(scaled, None, 12, 7, 21)
+        regions.append(
+            cv2.adaptiveThreshold(
+                denoised,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                31,
+                11,
+            )
+        )
+
+    return regions
 
 
 def extract_degree_from_text(text: str) -> str:
@@ -90,6 +122,11 @@ def extract_degree_from_text(text: str) -> str:
             if value:
                 return value
 
+    for line in lines:
+        value = clean_degree_value(line)
+        if value and DEGREE_VALUE_PATTERN.search(value):
+            return value
+
     return ''
 
 
@@ -98,6 +135,11 @@ def normalize_ocr_line(line: str) -> str:
 
 
 def clean_degree_value(value: str) -> str:
+    degree_match = DEGREE_VALUE_PATTERN.search(value)
+    if degree_match:
+        value = degree_match.group(0)
+
+    value = DEGREE_VALUE_STOP_PATTERN.sub('', value)
     value = re.sub(r'^[\s:.\-]+', '', value)
     value = re.sub(r'[\s\-_.]+$', '', value)
     value = re.sub(r'\s+', ' ', value).strip()

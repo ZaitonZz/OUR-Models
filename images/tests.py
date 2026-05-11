@@ -1,5 +1,6 @@
 import json
 import shutil
+import sys
 import tempfile
 from io import BytesIO
 from pathlib import Path
@@ -14,7 +15,7 @@ from django.test import TestCase, override_settings
 from PIL import Image
 
 from .models import ImageJob
-from .ocr import extract_degree_from_path, extract_degree_from_text
+from .ocr import extract_degree_from_image, extract_degree_from_path, extract_degree_from_text
 from .signature_verification import (
     SiameseResNet18,
     distance_to_score,
@@ -619,6 +620,44 @@ class OcrExtractionTests(TestCase):
             extract_degree_from_text(text),
             'Bachelor of Science in Psychology',
         )
+
+    def test_degree_extraction_trims_semester_text_from_noisy_next_line(self):
+        text = """
+        . re Semester Admitted Degree/Title/Course
+        1ST SEMESTER, SY 2022-2023 Bachelor of Science in Information Technology
+        """
+
+        self.assertEqual(
+            extract_degree_from_text(text),
+            'Bachelor of Science in Information Technology',
+        )
+
+    def test_degree_extraction_falls_back_to_degree_phrase_when_label_is_missed(self):
+        text = '1ST SEMESTER, SY 2022-2023 Bachelor of Science in Information Technology'
+
+        self.assertEqual(
+            extract_degree_from_text(text),
+            'Bachelor of Science in Information Technology',
+        )
+
+    def test_degree_extraction_tries_multiple_image_regions(self):
+        pytesseract = SimpleNamespace(
+            image_to_string=Mock(
+                side_effect=[
+                    'Degree/Title/Course\n.So',
+                    'Degree/Title/Course\nBachelor of Science in Information Technology',
+                    '',
+                    '',
+                ]
+            )
+        )
+
+        with patch.dict(sys.modules, {'pytesseract': pytesseract}):
+            result = extract_degree_from_image(np.full((100, 100, 3), 255, dtype=np.uint8))
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['degree'], 'Bachelor of Science in Information Technology')
+        self.assertEqual(pytesseract.image_to_string.call_count, 2)
 
 
 class SignatureVerificationTests(TestCase):
