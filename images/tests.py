@@ -560,6 +560,8 @@ class SignatureReferenceSyncApiTests(TestCase):
 
 
 class OcrExtractionTests(TestCase):
+    SAMPLE_TOR_IMAGE = Path(r'C:\Users\Philip Candelario\Downloads\IMG20260227145837.png')
+
     @patch('images.ocr.extract_degree_from_image')
     @patch('images.ocr.cv2.imread')
     def test_degree_extraction_reads_original_image_path(self, mock_imread, mock_extract_degree):
@@ -642,6 +644,22 @@ class OcrExtractionTests(TestCase):
             extract_degree_from_text(text),
             'MASTER OF SCIENCE IN BIOLOGY (MSBio)',
         )
+
+    def test_degree_extraction_reads_sample_tor_image(self):
+        if not self.SAMPLE_TOR_IMAGE.exists():
+            self.skipTest('Sample TOR image is not available on this machine.')
+
+        try:
+            import pytesseract
+
+            pytesseract.get_tesseract_version()
+        except Exception as exc:
+            self.skipTest(f'Tesseract OCR is not available: {exc}')
+
+        result = extract_degree_from_path(str(self.SAMPLE_TOR_IMAGE))
+
+        self.assertTrue(result['success'], result['raw_text'])
+        self.assertEqual(result['degree'], 'MASTER OF SCIENCE IN BIOLOGY (MSBio)')
 
     def test_degree_extraction_falls_back_to_degree_phrase_when_label_is_missed(self):
         text = '1ST SEMESTER, SY 2022-2023 Bachelor of Science in Information Technology'
