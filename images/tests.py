@@ -106,6 +106,46 @@ class ImageUploadApiTests(TestCase):
         self.assertEqual(ImageJob.objects.count(), 0)
         self.assertIn('Unknown model_key', response.json()['error'])
 
+    @patch('images.services.extract_degree_from_path')
+    @patch('images.services.verify_signatures')
+    @patch('images.services.get_detector')
+    @patch('images.services.DocumentPreprocessor.load_config')
+    def test_upload_api_runs_efficientnet_topk_inference(self, mock_load_config, mock_get_detector, mock_verify_signatures, mock_extract_degree):
+        mock_load_config.return_value = Mock(run=Mock(return_value=self.make_preprocess_result()))
+        mock_get_detector.return_value = Mock(
+            predict=Mock(return_value=self.make_topk_inference_result())
+        )
+        mock_verify_signatures.return_value = self.make_signature_verification()
+        mock_extract_degree.return_value = self.make_degree_extraction()
+
+        response = self.client.post(
+            '/api/images/',
+            {
+                'image': self.make_image_upload(),
+                'external_id': 'website-topk-model',
+                'model_key': 'efficientnet_b0_topk',
+                'expected_signatures': json.dumps(self.expected_signatures()),
+            },
+            HTTP_X_TOR_SERVICE_TOKEN='test-token',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        job = ImageJob.objects.get(pk=payload['id'])
+
+        self.assertEqual(job.model_key, 'efficientnet_b0_topk')
+        self.assertEqual(job.result['model_key'], 'efficientnet_b0_topk')
+        self.assertEqual(job.result['model_label'], 'EfficientNet-B0 top-k aggregation')
+        self.assertEqual(job.result['model_threshold'], 0.8)
+        self.assertEqual(job.result['threshold'], 0.8)
+        self.assertEqual(job.result['aggregation'], 'topk_mean')
+        self.assertEqual(job.result['top_roi_score'], 0.933)
+        self.assertEqual(job.result['roi_scores']['footer']['top5_mean'], 0.933)
+        self.assertEqual(payload['model_key'], 'efficientnet_b0_topk')
+        self.assertEqual(payload['model_label'], 'EfficientNet-B0 top-k aggregation')
+        self.assertEqual(payload['model_threshold'], 0.8)
+        mock_get_detector.assert_called_once_with('efficientnet_b0_topk')
+
     @patch('images.services.requests.post')
     @patch('images.services.extract_degree_from_path')
     @patch('images.services.verify_signatures')
@@ -387,6 +427,24 @@ class ImageUploadApiTests(TestCase):
             score=0.1234,
             roi_scores={'header': 0.1, 'body': 0.12, 'footer': 0.15},
             top_roi='footer',
+            error=None,
+        )
+
+    @staticmethod
+    def make_topk_inference_result():
+        return SimpleNamespace(
+            success=True,
+            label='fake',
+            score=0.933,
+            roi_scores={
+                'header': {'n_patches': 1, 'mean': 0.2, 'max': 0.2, 'top5_mean': 0.2},
+                'body': {'n_patches': 2, 'mean': 0.4, 'max': 0.45, 'top5_mean': 0.4},
+                'footer': {'n_patches': 3, 'mean': 0.8, 'max': 0.98, 'top5_mean': 0.933},
+            },
+            top_roi='footer',
+            top_roi_score=0.933,
+            aggregation='topk_mean',
+            threshold=0.8,
             error=None,
         )
 

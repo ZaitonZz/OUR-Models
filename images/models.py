@@ -2,6 +2,11 @@ from django.db import models
 
 
 class ImageJob(models.Model):
+    class ModelKey(models.TextChoices):
+        EFFICIENTNET_B0 = 'efficientnet_b0', 'EfficientNet-B0 baseline'
+        EFFICIENTNET_B0_TOPK = 'efficientnet_b0_topk', 'EfficientNet-B0 top-k aggregation'
+        RESNET50_MEAN = 'resnet50_mean', 'ResNet50 mean aggregation'
+
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
         PREPROCESSING = 'preprocessing', 'Preprocessing'
@@ -10,7 +15,11 @@ class ImageJob(models.Model):
         FAILED = 'failed', 'Failed'
 
     external_id = models.CharField(max_length=255, unique=True, db_index=True)
-    model_key = models.CharField(max_length=64, default='efficientnet_b0')
+    model_key = models.CharField(
+        max_length=64,
+        choices=ModelKey.choices,
+        default=ModelKey.EFFICIENTNET_B0,
+    )
     image = models.ImageField(upload_to='uploads/%Y/%m/%d/')
     preprocessed_image = models.ImageField(upload_to='preprocessed/%Y/%m/%d/', blank=True)
     callback_url = models.URLField(blank=True)

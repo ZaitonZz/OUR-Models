@@ -135,7 +135,7 @@ def build_result_payload(job: ImageJob, request=None) -> dict:
 def run_models(patches: list, model_key: str) -> dict:
     config = get_model_config(model_key)
     inference_result = get_detector(config.key).predict(patches)
-    return {
+    result = {
         'success': inference_result.success,
         'label': inference_result.label,
         'score': inference_result.score,
@@ -144,3 +144,9 @@ def run_models(patches: list, model_key: str) -> dict:
         **model_metadata(config.key),
         'error': inference_result.error or '',
     }
+
+    for attribute in ['top_roi_score', 'aggregation', 'threshold']:
+        if hasattr(inference_result, attribute):
+            result[attribute] = getattr(inference_result, attribute)
+
+    return result
