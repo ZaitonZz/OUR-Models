@@ -3,10 +3,16 @@
     "ratio_max": 0.75,
     "min_area_frac": 0.1,
     "max_area_frac": 0.9,
+
     "target_w": 1024,
     "target_h": 1700,
+
+    "preprocess_w": 1024,
+    "preprocess_h": 1536,
+
     "patch_size": 128,
     "stride": 64,
+
     "clahe_clip": 2.0,
     "clahe_tile": 8,
     "gaussian_ksize": 3,
@@ -14,6 +20,7 @@
     "median_ksize": 3,
     "denoise_alpha": 0.5,
     "min_skew_angle": 3.0,
+
     "rois": {
         "header": {
             "x1": 10,

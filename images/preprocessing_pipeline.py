@@ -19,10 +19,11 @@
 # Pipeline order (genuine):
 #   1. Detect & crop document (perspective transform)
 #   2. Deskew if needed (>= min_skew_angle degrees)
-#   3. CLAHE contrast adjustment
-#   4. Gaussian + Median denoising
-#   5. Standardize to 1024x1700
-#   6. Patch extraction
+#   3. Resize to preprocess_w x preprocess_h (1024x1536)
+#   4. CLAHE contrast adjustment
+#   5. Gaussian + Median denoising
+#   6. Standardize to 1024x1700 (white canvas, ~82px top/bottom margin)
+#   7. Patch extraction
 # ============================================================
 
 import cv2
@@ -44,6 +45,11 @@ class PipelineConfig:
     max_area_frac:  float = 0.90
     target_w:       int   = 1024
     target_h:       int   = 1700
+
+    # Training preprocessing size (before final canvas)
+    preprocess_w:   int   = 1024
+    preprocess_h:   int   = 1536
+
     patch_size:     int   = 128
     stride:         int   = 64
     # CLAHE
@@ -74,6 +80,7 @@ class PreprocessResult:
     patches:      list                 # list of patch dicts (see below)
     patch_counts: dict                 # {"header": N, "body": N, "footer": N}
     error:        Optional[str] = None
+    cropped_path: Optional[str] = None # path to saved cropped PNG, or None if not saved
 
 # Each patch dict:
 #   array        -> 128x128 BGR numpy array   (feed this to the model)
@@ -116,10 +123,11 @@ class DocumentPreprocessor:
         Pipeline:
           1. Detect & crop document (perspective transform)
           2. Deskew if skew >= min_skew_angle
-          3. CLAHE contrast adjustment
-          4. Gaussian + Median denoising
-          5. Standardize to target_w x target_h
-          6. Extract patches
+          3. Resize to preprocess_w x preprocess_h (1024x1536)
+          4. CLAHE contrast adjustment
+          5. Gaussian + Median denoising
+          6. Standardize to target_w x target_h (1024x1700 white canvas)
+          7. Extract patches
 
         Returns PreprocessResult with warped image and patches ready for model.
         """
@@ -133,6 +141,18 @@ class DocumentPreprocessor:
 
         # Step 1 - Crop & perspective correct
         cropped, method = self._crop(image)
+
+        # Save cropped image as PNG (works for both image_path and image_array)
+        output_folder = "cropped_outputs"
+        os.makedirs(output_folder, exist_ok=True)
+
+        if image_path:
+            base_name = os.path.splitext(os.path.basename(image_path))[0]
+        else:
+            base_name = uuid.uuid4().hex[:8]
+
+        cropped_png_path = os.path.join(output_folder, f"{base_name}_cropped.png")
+        cv2.imwrite(cropped_png_path, cropped)
 
         # Steps 2-4 - Genuine enhancement (deskew -> CLAHE -> denoise)
         enhanced, skew_status = self._enhance(cropped)
@@ -150,6 +170,7 @@ class DocumentPreprocessor:
             warped=standardized,
             patches=patches,
             patch_counts=counts,
+            cropped_path=cropped_png_path,
         )
 
     # -- CROP PREVIEW ---------------------------------------------------------
@@ -161,12 +182,21 @@ class DocumentPreprocessor:
     ):
         """
         Crop only - use for the UI preview step.
-        Returns (cropped_image, method).
+        Returns (cropped_image, method, cropped_path).
+        Saves the cropped result to cropped_outputs/ as a PNG.
         """
         image = self._load(image_path, image_array)
         if image is None:
-            return None, "failed"
-        return self._crop(image)
+            return None, "failed", None
+        cropped, method = self._crop(image)
+
+        output_folder = "cropped_outputs"
+        os.makedirs(output_folder, exist_ok=True)
+        base_name = os.path.splitext(os.path.basename(image_path))[0] if image_path else uuid.uuid4().hex[:8]
+        cropped_path = os.path.join(output_folder, f"{base_name}_cropped.png")
+        cv2.imwrite(cropped_path, cropped)
+
+        return cropped, method, cropped_path
 
     def crop_manual(
         self,
@@ -177,15 +207,23 @@ class DocumentPreprocessor:
         """
         If user adjusted corners in the UI, call this instead of crop_preview.
         corners: np.array([[x1,y1],[x2,y2],[x3,y3],[x4,y4]], dtype=float32)
-        Returns (cropped_image, "manual").
+        Returns (cropped_image, "manual", cropped_path).
+        Saves the cropped result to cropped_outputs/ as a PNG.
         """
         image = self._load(image_path, image_array)
         if image is None:
-            return None, "failed"
+            return None, "failed", None
         image  = self._rotate_to_portrait(image)
         warped = self._four_point_transform(image, corners)
         warped = self._rotate_to_portrait(warped)
-        return warped, "manual"
+
+        output_folder = "cropped_outputs"
+        os.makedirs(output_folder, exist_ok=True)
+        base_name = os.path.splitext(os.path.basename(image_path))[0] if image_path else uuid.uuid4().hex[:8]
+        cropped_path = os.path.join(output_folder, f"{base_name}_cropped.png")
+        cv2.imwrite(cropped_path, warped)
+
+        return warped, "manual", cropped_path
 
     # -- INTERNALS ------------------------------------------------------------
 
@@ -211,13 +249,16 @@ class DocumentPreprocessor:
 
     def _enhance(self, image):
         """
-        Genuine preprocessing steps - applied after crop, before standardize.
+        Genuine preprocessing steps after crop.
 
-        Step 2 - Deskew (Hough line detection, only if skew >= min_skew_angle)
-        Step 3 - CLAHE on L channel in LAB space
-        Step 4 - Blended Gaussian + Median denoising
+        Matches training-style genuine preprocessing:
+          1. Deskew only if skew >= min_skew_angle
+          2. Resize to preprocess_w x preprocess_h (1024x1536)
+          3. CLAHE on L channel
+          4. Gaussian + Median denoising
+          5. uint8 normalization
         """
-        # Step 2 - Deskew
+        # Step 1 - Deskew
         skew = self._measure_skew(image)
         if abs(skew) >= self.cfg.min_skew_angle:
             h, w   = image.shape[:2]
@@ -237,6 +278,13 @@ class DocumentPreprocessor:
             skew_status = "deskewed"
         else:
             skew_status = "flat"
+
+        # Step 2 - Resize to training intermediate size
+        image = cv2.resize(
+            image,
+            (self.cfg.preprocess_w, self.cfg.preprocess_h),
+            interpolation=cv2.INTER_LANCZOS4,
+        )
 
         # Step 3 - CLAHE (L channel in LAB space)
         lab        = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
